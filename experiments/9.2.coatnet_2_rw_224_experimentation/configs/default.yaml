@@ -1,0 +1,16 @@
+model:
+  name: coatnet_2_rw_224
+  pretrained: true
+  out_indices: [0, 1, 2, 3]
+  decoder_channels: 128
+  adapter_channels: [64, 96, 192, 384]
+training:
+  image_size: 224
+  batch_size: 4
+  epochs: 20
+  head_lr: 1.0e-4
+  backbone_lr: 1.0e-5
+  weight_decay: 1.0e-4
+segmentation:
+  output_channels: 1
+  loss: bce_dice

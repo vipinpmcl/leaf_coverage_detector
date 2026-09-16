@@ -1,0 +1,8 @@
+#notebooks
+__pycache__/
+*.pyc
+*.egg-info/
+**/data/
+**/runs/
+**/outputs/
+**/archive/

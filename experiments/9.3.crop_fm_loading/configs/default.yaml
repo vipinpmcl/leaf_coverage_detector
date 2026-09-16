@@ -1,0 +1,35 @@
+model:
+  name: coatnet_2_rw_224
+  foundation_checkpoint: "checkpoints/coatnet2_foundation.pth"
+  pretrained: false
+  out_indices: [1, 2, 3, 4]
+  backbone_channels: [128, 256, 512, 1024]
+  adapter_channels: [64, 96, 192, 384]
+  decoder_channels: 128
+
+data:
+  image_dir: "data/images"
+  mask_dir: "data/masks"
+  image_size: 224
+  val_ratio: 0.2
+  seed: 42
+
+training:
+  batch_size: 2
+  epochs: 20
+  num_workers: 2
+  head_lr: 1.0e-4
+  backbone_lr: 1.0e-5
+  weight_decay: 1.0e-4
+  freeze_backbone: true
+  amp: true
+  output_dir: "runs/coatnet2_leaf"
+  threshold: 0.5
+
+normalization:
+  mean: [0.5, 0.5, 0.5]
+  std: [0.5, 0.5, 0.5]
+
+segmentation:
+  loss: bce_dice
+  output_channels: 1
