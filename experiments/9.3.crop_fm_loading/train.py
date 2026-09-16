@@ -59,6 +59,26 @@ def main():
         "--config",
         default="configs/default.yaml",
     )
+    parser.add_argument(
+        "--images",
+        type=str,
+        required=True,
+        help="Image directory.",
+    )
+
+    parser.add_argument(
+        "--masks",
+        type=str,
+        required=True,
+        help="Mask directory.",
+    )
+
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="runs/coatnet_leaf",
+        help="Output directory.",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -71,7 +91,10 @@ def main():
     if device.type == "cuda":
         print("GPU:", torch.cuda.get_device_name(0))
 
-    image_paths = discover_images(cfg["data"]["image_dir"])
+    # image_paths = discover_images(cfg["data"]["image_dir"])
+    args.images = Path(args.images)
+    args.masks = Path(args.masks)
+    image_paths = discover_images(args.images)
     train_paths, val_paths = split_paths(
         image_paths,
         cfg["data"]["val_ratio"],
@@ -84,7 +107,8 @@ def main():
 
     train_ds = LeafSegmentationDataset(
         train_paths,
-        cfg["data"]["mask_dir"],
+        # cfg["data"]["mask_dir"],
+        args.masks,
         image_size=size,
         mean=mean,
         std=std,
@@ -93,7 +117,8 @@ def main():
 
     val_ds = LeafSegmentationDataset(
         val_paths,
-        cfg["data"]["mask_dir"],
+        # cfg["data"]["mask_dir"],
+        args.masks,
         image_size=size,
         mean=mean,
         std=std,
@@ -155,7 +180,8 @@ def main():
         enabled=amp_enabled,
     )
 
-    out_dir = Path(cfg["training"]["output_dir"])
+    # out_dir = Path(cfg["training"]["output_dir"])
+    out_dir = Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     best_iou = -1.0

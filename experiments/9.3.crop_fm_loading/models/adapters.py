@@ -13,7 +13,7 @@ class FeatureAdapters(nn.Module):
 
         self.adapters = nn.ModuleList([
             nn.Sequential(
-                nn.Conv2d(cin, cout, 1, bias=False),
+                nn.Conv2d(cin, cout, 1, bias=False), #conv_1x1
                 nn.BatchNorm2d(cout),
                 nn.ReLU(inplace=True),
             )

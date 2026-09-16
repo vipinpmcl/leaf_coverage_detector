@@ -1,6 +1,6 @@
 model:
   name: coatnet_2_rw_224
-  foundation_checkpoint: "checkpoints/coatnet2_foundation.pth"
+  foundation_checkpoint: "checkpoints/crop_fm1_coatNet2rw224.pth"
   pretrained: false
   out_indices: [1, 2, 3, 4]
   backbone_channels: [128, 256, 512, 1024]
@@ -22,7 +22,7 @@ training:
   backbone_lr: 1.0e-5
   weight_decay: 1.0e-4
   freeze_backbone: true
-  amp: true
+  amp: false
   output_dir: "runs/coatnet2_leaf"
   threshold: 0.5
 

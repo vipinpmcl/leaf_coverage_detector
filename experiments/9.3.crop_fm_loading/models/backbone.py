@@ -164,7 +164,7 @@ class CoAtNet2Backbone(nn.Module):
         unused = []
 
         for i, (key, value) in enumerate(source_state.items()):
-            print(i, key)
+            # print(i, key)
 
             if key not in model_state:
                 unused.append(key)
@@ -248,17 +248,18 @@ class CoAtNet2Backbone(nn.Module):
         print("\nCheckpoint loaded successfully.")
         print(f"  Missing keys after load    : {len(missing_keys)}")
         print(f"  Unexpected keys after load : {len(unexpected_keys)}")
-        def forward(self, x):
-            outputs = self.encoder(x)
-            return {
-                f"f{i + 1}": feature
-                for i, feature in enumerate(outputs)
-            }
 
-        def freeze(self):
-            for p in self.parameters():
-                p.requires_grad = False
+    def forward(self, x):
+        outputs = self.encoder(x)
+        return {
+            f"f{i + 1}": feature
+            for i, feature in enumerate(outputs)
+        }
 
-        def unfreeze(self):
-            for p in self.parameters():
-                p.requires_grad = True
+    def freeze(self):
+        for p in self.parameters():
+            p.requires_grad = False
+
+    def unfreeze(self):
+        for p in self.parameters():
+            p.requires_grad = True
