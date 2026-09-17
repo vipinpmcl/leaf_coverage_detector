@@ -1,0 +1,26 @@
+model:
+  name: dinov2_vits14
+  image_size: 224
+  feature_dim: 384
+  freeze_backbone_epochs: 2
+
+decoder:
+  hidden_dim: 192
+  dropout: 0.1
+
+training:
+  batch_size: 8
+  epochs: 30
+  backbone_learning_rate: 0.00001
+  decoder_learning_rate: 0.0005
+  weight_decay: 0.0001
+  val_fraction: 0.2
+  seed: 42
+  num_workers: 0
+  threshold: 0.5
+  dice_weight: 0.5
+  bce_weight: 0.5
+
+output:
+  directory: outputs
+  alpha: 0.45

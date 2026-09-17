@@ -4,8 +4,8 @@ model:
   pretrained: false
   out_indices: [1, 2, 3, 4]
   backbone_channels: [128, 256, 512, 1024]
-  adapter_channels: [64, 96, 192, 384]
-  decoder_channels: 128
+  adapter_channels: [384, 256, 128, 96]
+  decoder_channels: 192
 
 data:
   image_dir: "data/images"
@@ -16,7 +16,7 @@ data:
 
 training:
   batch_size: 2
-  epochs: 20
+  epochs: 35
   num_workers: 2
   head_lr: 1.0e-4
   backbone_lr: 1.0e-5
@@ -24,11 +24,11 @@ training:
   freeze_backbone: true
   amp: false
   output_dir: "runs/coatnet2_leaf"
-  threshold: 0.5
+  threshold: 0.8
 
 normalization:
-  mean: [0.5, 0.5, 0.5]
-  std: [0.5, 0.5, 0.5]
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
 
 segmentation:
   loss: bce_dice
