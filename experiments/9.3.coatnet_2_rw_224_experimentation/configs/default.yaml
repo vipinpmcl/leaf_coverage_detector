@@ -24,7 +24,7 @@ training:
   freeze_backbone: true
   amp: false
   output_dir: "runs/coatnet2_leaf"
-  threshold: 0.8
+  threshold: 0.6
 
 normalization:
   mean: [0.485, 0.456, 0.406]
