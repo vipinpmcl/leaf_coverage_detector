@@ -2,24 +2,24 @@
 
 set -e
 
-CONFIG="runs/exp11/config.yaml"
-CHECKPOINT="runs/exp11/best.pt"
+CONFIG="runs/exp11_5/config.yaml"
+CHECKPOINT="runs/exp11_5/best.pt"
 
 BASE_DATA="../../../../datasets/20CropData/20Crops200Samples_Watermarked/20Crops200Samples_Watermarked"
 
 if [ "$#" -eq 0 ]; then
     echo "Usage:"
-    echo "  ./run_exp11_crop.sh <crop1> [crop2] [crop3] ..."
+    echo "  ./run_exp11_5_crop.sh <crop1> [crop2] [crop3] ..."
     echo ""
     echo "Example:"
-    echo "  ./run_exp11_crop.sh Potato Cotton Groundnut"
+    echo "  ./run_exp11_5_crop.sh Potato Cotton Groundnut"
     exit 1
 fi
 
 for CROP in "$@"; do
 
     IMAGE_DIR="$BASE_DATA/$CROP"
-    OUTPUT_DIR="runs/exp11/${CROP,,}"
+    OUTPUT_DIR="runs/exp11_5/${CROP,,}"
 
     echo ""
     echo "========================================"
