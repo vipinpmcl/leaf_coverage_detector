@@ -1,0 +1,35 @@
+{
+  "version": "5.0.0",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "leaf",
+      "points": [
+        [
+          100,
+          100
+        ],
+        [
+          500,
+          100
+        ],
+        [
+          500,
+          350
+        ],
+        [
+          100,
+          350
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "polygon",
+      "flags": {}
+    }
+  ],
+  "imagePath": "sample.jpg",
+  "imageData": null,
+  "imageHeight": 450,
+  "imageWidth": 600
+}

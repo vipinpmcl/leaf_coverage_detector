@@ -1,0 +1,57 @@
+device: cuda
+
+input:
+  original_name: original.jpg
+  mask_name: mask.png
+  coverage_name: leaf_coverage.txt
+  skip_directories:
+    - clusters_output
+
+output:
+  directory: auto_annotation_output
+  copy_image: true
+  overwrite: true
+
+# Coverage routing:
+#   coverage < low_threshold_percent -> one negative point annotation
+#   low_threshold_percent <= coverage <= high_threshold_percent -> ignore
+#   coverage > high_threshold_percent -> CoAtNet2 mask + SAM2 polygons
+coverage:
+  enabled: true
+  low_threshold_percent: 1.0
+  high_threshold_percent: 100.0
+  negative_label: negative
+  negative_description: "Leaf coverage below low threshold"
+  point_source: mask_centroid
+  empty_mask_fallback: image_center
+
+sam2:
+  checkpoint: /d/Vipin/github_repos/sam2/checkpoints/sam2.1_hiera_large.pt
+  model_cfg: /d/Vipin/github_repos/sam2/sam2/configs/sam2.1/sam2.1_hiera_l.yaml
+  multimask_output: true
+  mask_threshold: 0.0
+  prompt_logit_abs_value: 10.0
+  prompt_size: [256, 256]
+  autocast_dtype: bfloat16
+
+components:
+  min_area: 1000
+  keep_largest_n: 0
+
+refinement:
+  min_prompt_overlap: 0.30
+  remove_small_components: 100
+
+polygon:
+  epsilon_ratio: 0.002
+  min_area: 10000
+
+visualization:
+  enabled: false
+  alpha: 0.45
+
+labelme:
+  version: "5.11.3"
+  label: leaf
+  description: ""
+  embed_image_data: true

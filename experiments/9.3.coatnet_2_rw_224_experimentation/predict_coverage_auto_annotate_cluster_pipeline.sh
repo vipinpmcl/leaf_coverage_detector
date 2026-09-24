@@ -2,24 +2,17 @@
 
 set -e
 
-CONFIG="runs/exp11_5/config.yaml"
-CHECKPOINT="runs/exp11_5/best.pt"
+EXP_ID="exp11_7"
+CONFIG="runs/${EXP_ID}/config.yaml"
+CHECKPOINT="runs/${EXP_ID}/best.pt"
 
 BASE_DATA="../../../../datasets/20CropData/20Crops200Samples_Watermarked/20Crops200Samples_Watermarked"
 
-if [ "$#" -eq 0 ]; then
-    echo "Usage:"
-    echo "  ./run_exp11_5_crop.sh <crop1> [crop2] [crop3] ..."
-    echo ""
-    echo "Example:"
-    echo "  ./run_exp11_5_crop.sh Potato Cotton Groundnut"
-    exit 1
-fi
 
 for CROP in "$@"; do
 
     IMAGE_DIR="$BASE_DATA/$CROP"
-    OUTPUT_DIR="runs/exp11_5/${CROP,,}"
+    OUTPUT_DIR="runs/${EXP_ID}/${CROP,,}"
 
     echo ""
     echo "========================================"
@@ -49,12 +42,16 @@ for CROP in "$@"; do
         --input-dir "$OUTPUT_DIR/" \
         --output-dir "$OUTPUT_DIR/"
 
-    # 3. Cluster based on leaf coverage
-    python tools/clusters_data_based_on_coverage.py \
+    # 3. Refine annotations based on leaf coverage
+    python tools/auto_annotation_based_on_leaf_coverage_v5/scripts/refine_batch.py --config tools/auto_annotation_based_on_leaf_coverage_v5/configs/default.yaml --input-dir runs/${EXP_ID}/${CROP,,}/
+    
+    
+    # 4. Cluster based on leaf coverage
+    python tools/clusters_data_based_on_coverage_v2.py \
         --csv "$OUTPUT_DIR/leaf_coverage.csv" \
         --image-dir "$IMAGE_DIR" \
         --output-dir "$OUTPUT_DIR/clusters_output" \
-        --n-clusters 3 \
+        --n-clusters 5 \
         --copy
 
     echo ""

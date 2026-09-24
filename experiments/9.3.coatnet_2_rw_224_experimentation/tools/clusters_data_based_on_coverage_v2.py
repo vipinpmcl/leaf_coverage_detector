@@ -390,12 +390,54 @@ def main():
                 continue
 
             try:
+                # Copy image
                 shutil.copy2(
                     str(source_image),
                     str(destination),
                 )
 
                 successful += 1
+
+                # Copy corresponding annotation JSON if it exists.
+                # Expected structure:
+                #   sample-id/sample-id.jpg
+                #   sample-id/sample-id.json
+                source_json = source_image.with_suffix(".json")
+
+                sample_id = source_image.stem
+
+                # output_dir is .../clusters_output
+                # Therefore annotation root is its parent: .../potato
+                annotation_root = output_dir.parent
+
+                source_json = (
+                    annotation_root /
+                    sample_id /
+                    f"{sample_id}.json"
+                )
+
+                if source_json.is_file():
+
+                    destination_json = (
+                        cluster_dir /
+                        source_json.name
+                    )
+
+                    shutil.copy2(
+                        str(source_json),
+                        str(destination_json),
+                    )
+
+                    print(
+                        f"  Copied annotation: {source_json.name}"
+                    )
+
+                else:
+
+                    print(
+                        f"WARNING: Annotation not found: "
+                        f"{source_json}"
+                    )
 
             except Exception as e:
                 print(

@@ -1,0 +1,9 @@
+streamlit>=1.38
+torch
+torchvision
+timm
+pyyaml
+pillow
+numpy
+pandas
+requests
