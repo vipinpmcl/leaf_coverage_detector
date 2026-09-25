@@ -1,0 +1,18 @@
+model:
+  name: coatnet_2_rw_224
+  foundation_checkpoint: "../experiments/9.3.coatnet_2_rw_224_experimentation/checkpoints/crop_fm1_coatNet2rw224.pth"
+  trained_checkpoint: "../experiments/9.3.coatnet_2_rw_224_experimentation/runs/exp11_7/best.pt"
+  out_indices: [1, 2, 3, 4]
+  backbone_channels: [128, 256, 512, 1024]
+  adapter_channels: [384, 256, 128, 96]
+  decoder_channels: 192
+
+data:
+  image_size: 224
+
+normalization:
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+
+inference:
+  threshold: 0.6

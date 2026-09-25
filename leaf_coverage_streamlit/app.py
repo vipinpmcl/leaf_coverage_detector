@@ -290,11 +290,11 @@ def show_single_result(image: Image.Image, result, threshold: float):
 
     st.markdown("### Visualization")
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.image(image, caption="Original", use_container_width=True)
-    with c2:
-        st.image(overlay, caption="Leaf overlay", use_container_width=True)
+    # c1, c2 = st.columns(2)
+    # with c1:
+    #     st.image(image, caption="Original", use_container_width=True)
+    # with c2:
+    #     st.image(overlay, caption="Leaf overlay", use_container_width=True)
 
     st.image(
         make_comparison(image, overlay),
@@ -553,11 +553,11 @@ with single_tab:
 
         overlay = make_overlay(image, result["mask"], alpha=overlay_alpha)
 
-        c1, c2 = st.columns(2)
-        with c1:
-            st.image(image, caption="Original", use_container_width=True)
-        with c2:
-            st.image(overlay, caption="Leaf overlay", use_container_width=True)
+        # c1, c2 = st.columns(2)
+        # with c1:
+        #     st.image(image, caption="Original", use_container_width=True)
+        # with c2:
+        #     st.image(overlay, caption="Leaf overlay", use_container_width=True)
 
         st.image(
             make_comparison(image, overlay),

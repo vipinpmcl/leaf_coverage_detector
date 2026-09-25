@@ -2,7 +2,7 @@
 
 set -e
 
-EXP_ID="exp11_7"
+EXP_ID="exp11_9"
 CONFIG="runs/${EXP_ID}/config.yaml"
 CHECKPOINT="runs/${EXP_ID}/best.pt"
 
