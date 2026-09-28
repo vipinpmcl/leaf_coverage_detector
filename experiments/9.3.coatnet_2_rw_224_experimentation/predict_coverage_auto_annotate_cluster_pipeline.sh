@@ -6,7 +6,9 @@ EXP_ID="exp11_9"
 CONFIG="runs/${EXP_ID}/config.yaml"
 CHECKPOINT="runs/${EXP_ID}/best.pt"
 
-BASE_DATA="../../../../datasets/20CropData/20Crops200Samples_Watermarked/20Crops200Samples_Watermarked"
+# BASE_DATA="../../../../datasets/20CropData/20Crops200Samples_Watermarked/20Crops200Samples_Watermarked"
+BASE_DATA="data/20crop200samples_leaf_coverage_data/2.test/"
+# BASE_DATA="data/2.test/"
 
 
 for CROP in "$@"; do
@@ -50,7 +52,7 @@ for CROP in "$@"; do
     python tools/clusters_data_based_on_coverage_v2.py \
         --csv "$OUTPUT_DIR/leaf_coverage.csv" \
         --image-dir "$IMAGE_DIR" \
-        --output-dir "$OUTPUT_DIR/clusters_output" \
+        --output-dir "$OUTPUT_DIR/clusters_output_sam2_0_1_0p6" \
         --n-clusters 5 \
         --copy
 

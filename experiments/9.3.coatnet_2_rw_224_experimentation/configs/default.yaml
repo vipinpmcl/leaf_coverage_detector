@@ -4,8 +4,9 @@ model:
   pretrained: false
   out_indices: [1, 2, 3, 4]
   backbone_channels: [128, 256, 512, 1024]
-  adapter_channels: [384, 256, 128, 96]
-  decoder_channels: 192
+  # adapter_channels: [384, 256, 128, 96]
+  adapter_channels: [128, 256, 128, 96]
+  decoder_channels: 256
 
 data:
   image_dir: "data/images"

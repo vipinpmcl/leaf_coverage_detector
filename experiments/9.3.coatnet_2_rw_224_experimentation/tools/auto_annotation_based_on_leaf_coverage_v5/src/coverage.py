@@ -33,9 +33,9 @@ def read_leaf_coverage(path: str | Path) -> float:
 def classify_coverage(value: float, low_threshold: float, high_threshold: float) -> str:
     """Classify coverage using a gap-free boundary convention.
 
-    < low  -> negative point
+    < low  -> empty negative mask
     [low, high] -> ignore
-    > high and <= 100 -> SAM2 polygon annotation
+    > high and <= 100 -> SAM2 mask annotation
     """
     if not (0 <= low_threshold < high_threshold <= 100):
         raise ValueError(
@@ -44,7 +44,7 @@ def classify_coverage(value: float, low_threshold: float, high_threshold: float)
         )
 
     if value < low_threshold:
-        return "negative_point"
+        return "negative_mask"
     if value <= high_threshold:
         return "ignore"
-    return "sam2_polygon"
+    return "sam2_mask"

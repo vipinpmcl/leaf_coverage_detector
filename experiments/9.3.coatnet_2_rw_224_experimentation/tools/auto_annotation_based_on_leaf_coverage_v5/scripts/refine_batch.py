@@ -9,6 +9,8 @@ from pathlib import Path
 
 import numpy as np
 import yaml
+import os
+import re
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -17,8 +19,6 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.components import connected_components, remove_small_components  # noqa: E402
 from src.coverage import classify_coverage, read_leaf_coverage  # noqa: E402
 from src.input_loader import discover_prediction_samples, read_image, read_mask  # noqa: E402
-from src.labelme import save_labelme_json  # noqa: E402
-from src.polygons import mask_to_polygons  # noqa: E402
 from src.visualization import save_mask, save_overlay  # noqa: E402
 
 
@@ -27,22 +27,39 @@ def load_config(path):
         return yaml.safe_load(f)
 
 
-def resolve_path(value, config_path):
-    path = Path(value)
-    if path.is_absolute():
-        return path
-    project_path = PROJECT_ROOT / path
-    if project_path.exists():
-        return project_path
-    return Path(config_path).resolve().parent / path
+def resolve_path(path, config_path):
+    path = str(path).strip()
+
+    # Convert WSL/MSYS-style paths such as:
+    # /d/Vipin/github_repos/sam2/...
+    # to:
+    # D:\Vipin\github_repos\sam2\...
+    match = re.match(r"^/([a-zA-Z])/(.*)$", path)
+
+    if match:
+        drive = match.group(1).upper()
+        remainder = match.group(2)
+
+        if os.name == "nt":
+            return Path(f"{drive}:/{remainder}").resolve()
+
+        # On Linux/WSL, keep the original /d/... form.
+        return Path(path).resolve()
+
+    path_obj = Path(path)
+
+    if path_obj.is_absolute():
+        return path_obj.resolve()
+
+    return (config_path.parent / path_obj).resolve()
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Create LabelMe annotations from CoAtNet2 masks. "
-            "Low coverage becomes a negative point, the middle range is ignored, "
-            "and high coverage is refined with SAM2 polygons."
+            "Create mask annotations from CoAtNet2 masks. "
+            "Low coverage becomes an empty negative mask, the middle range is ignored, "
+            "and high coverage is refined with SAM2 mask output."
         )
     )
     parser.add_argument("--config", required=True)
@@ -53,46 +70,6 @@ def parse_args():
     parser.add_argument("--sam-config", default=None)
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
-
-
-def mask_centroid(mask: np.ndarray) -> list[float] | None:
-    ys, xs = np.nonzero(mask > 0)
-    if len(xs) == 0:
-        return None
-    return [float(xs.mean()), float(ys.mean())]
-
-
-def image_center(image_rgb: np.ndarray) -> list[float]:
-    height, width = image_rgb.shape[:2]
-    return [float((width - 1) / 2.0), float((height - 1) / 2.0)]
-
-
-def get_negative_point(mask, image_rgb, source, empty_fallback):
-    if source == "mask_centroid":
-        point = mask_centroid(mask)
-
-        if point is not None:
-            return point
-
-        # Empty mask fallback
-        if empty_fallback == "image_center":
-            return image_center(image_rgb)
-
-        if empty_fallback == "error":
-            raise RuntimeError(
-                "Cannot create negative point: mask is empty."
-            )
-
-        raise ValueError(
-            f"Unsupported coverage.empty_mask_fallback: {empty_fallback}"
-        )
-
-    if source == "image_center":
-        return image_center(image_rgb)
-
-    raise ValueError(
-        f"Unsupported coverage.point_source: {source}"
-    )
 
 
 def main():
@@ -106,9 +83,7 @@ def main():
     sam_cfg = cfg.get("sam2", {})
     component_cfg = cfg.get("components", {})
     refinement_cfg = cfg.get("refinement", {})
-    polygon_cfg = cfg.get("polygon", {})
     visualization_cfg = cfg.get("visualization", {})
-    labelme_cfg = cfg.get("labelme", {})
     device = cfg.get("device", "cuda")
 
     output_dir = Path(
@@ -160,7 +135,7 @@ def main():
         except Exception as exc:
             prepared.append({**sample, "coverage": None, "mode": "error", "coverage_error": f"{type(exc).__name__}: {exc}"})
 
-    sam_needed = any(item["mode"] == "sam2_polygon" for item in prepared)
+    sam_needed = any(item["mode"] == "sam2_mask" for item in prepared)
     refiner = None
 
     if sam_needed:
@@ -204,7 +179,7 @@ def main():
         # sample_output_dir = output_dir / sample_id #Uncomment this line if you want to save the output in a directory named after the sample ID
         sample_output_dir = sample_dir #dele
         output_image_path = sample_output_dir / f"{sample_id}.jpg"
-        json_path = sample_output_dir / f"{sample_id}.json"
+        mask_output_path = sample_output_dir / f"{sample_id}_mask.png"
 
         print(f"\n[{index}/{len(prepared)}] {sample_id}")
         print(f"  Coverage: {coverage if coverage is not None else 'ERROR'}% -> {mode}")
@@ -214,7 +189,7 @@ def main():
                 "sample": sample_id, "leaf_coverage_percent": coverage,
                 "annotation_mode": mode, "status": "error",
                 "output_dir": str(sample_output_dir), "input_components": "",
-                "output_polygons": "", "output_points": "", "error": sample["error"],
+                "output_masks": "", "output_points": "", "error": sample["error"],
             })
             continue
 
@@ -224,7 +199,7 @@ def main():
                 "sample": sample_id, "leaf_coverage_percent": "",
                 "annotation_mode": "error", "status": "error",
                 "output_dir": str(sample_output_dir), "input_components": "",
-                "output_polygons": "", "output_points": "", "error": sample["coverage_error"],
+                "output_masks": "", "output_points": "", "error": sample["coverage_error"],
             })
             continue
 
@@ -244,7 +219,7 @@ def main():
                     "sample": sample_id, "leaf_coverage_percent": coverage,
                     "annotation_mode": "ignore", "status": "ignored_manual_review",
                     "output_dir": str(sample_output_dir), "input_components": "",
-                    "output_polygons": 0, "output_points": 0, "error": "",
+                    "output_masks": 0, "output_points": 0, "error": "",
                 })
             except Exception as exc:
                 print(f"  ERROR copying ignored image: {type(exc).__name__}: {exc}")
@@ -252,18 +227,19 @@ def main():
                     "sample": sample_id, "leaf_coverage_percent": coverage,
                     "annotation_mode": "ignore", "status": "error",
                     "output_dir": str(sample_output_dir), "input_components": "",
-                    "output_polygons": "", "output_points": "",
+                    "output_masks": "", "output_points": "",
                     "error": f"{type(exc).__name__}: {exc}",
                 })
             continue
 
-        if json_path.exists() and not args.overwrite:
-            print("  SKIP: JSON already exists")
+        expected_output_path = mask_output_path
+        if expected_output_path.exists() and not args.overwrite:
+            print(f"  SKIP: output already exists ({expected_output_path.name})")
             summary_rows.append({
                 "sample": sample_id, "leaf_coverage_percent": coverage,
                 "annotation_mode": mode, "status": "skipped",
                 "output_dir": str(sample_output_dir), "input_components": "",
-                "output_polygons": "", "output_points": "", "error": "",
+                "output_masks": "", "output_points": "", "error": "",
             })
             continue
 
@@ -281,37 +257,18 @@ def main():
                     f"Image/mask dimensions differ: {image_rgb.shape[:2]} vs {original_mask.shape[:2]}"
                 )
 
-            if mode == "negative_point":
-                point = get_negative_point(
-                    original_mask,
-                    image_rgb,
-                    coverage_cfg.get("point_source", "mask_centroid"),
-                    coverage_cfg.get("empty_mask_fallback", "error"),
-                )
-                save_labelme_json(
-                    output_path=json_path,
-                    image_path=output_image_path,
-                    polygons=[],
-                    label=labelme_cfg.get("label", "leaf"),
-                    description=labelme_cfg.get("description", ""),
-                    version=labelme_cfg.get("version", "5.11.3"),
-                    embed_image_data=labelme_cfg.get("embed_image_data", True),
-                    flags={},
-                    points=[point],
-                    point_label=coverage_cfg.get("negative_label", "negative"),
-                    point_description=coverage_cfg.get("negative_description", ""),
-                )
-
-                print(f"  Negative point: ({point[0]:.2f}, {point[1]:.2f})")
+            if mode == "negative_mask":
+                save_mask(mask_output_path, np.zeros_like(original_mask, dtype=np.uint8))
+                print(f"  Empty negative mask: {mask_output_path}")
                 summary_rows.append({
                     "sample": sample_id, "leaf_coverage_percent": coverage,
-                    "annotation_mode": "negative_point", "status": "ok",
+                    "annotation_mode": mode, "status": "ok",
                     "output_dir": str(sample_output_dir), "input_components": "",
-                    "output_polygons": 0, "output_points": 1, "error": "",
+                    "output_masks": 1, "output_points": 0, "error": "",
                 })
                 continue
 
-            # High coverage: existing CoAtNet2 -> SAM2 -> polygons.
+            # High coverage: existing CoAtNet2 -> SAM2 -> binary mask PNG.
             components = connected_components(
                 original_mask,
                 min_area=component_cfg.get("min_area", 10000),
@@ -341,22 +298,7 @@ def main():
                     refinement_cfg.get("remove_small_components", 10000),
                 )
 
-            polygons = mask_to_polygons(
-                final_mask,
-                epsilon_ratio=polygon_cfg.get("epsilon_ratio", 0.002),
-                min_area=polygon_cfg.get("min_area", 10000),
-            )
-
-            save_labelme_json(
-                output_path=json_path,
-                image_path=output_image_path,
-                polygons=polygons,
-                label=labelme_cfg.get("label", "leaf"),
-                description=labelme_cfg.get("description", ""),
-                version=labelme_cfg.get("version", "5.11.3"),
-                embed_image_data=labelme_cfg.get("embed_image_data", True),
-                flags={},
-            )
+            save_mask(mask_output_path, final_mask)
 
             if visualization_cfg.get("enabled", False):
                 save_mask(sample_output_dir / "sam2_refined_mask.png", final_mask)
@@ -370,23 +312,22 @@ def main():
             refinement_log = {
                 "sample": sample_id,
                 "leaf_coverage_percent": coverage,
-                "annotation_mode": "sam2_polygon",
+                "annotation_mode": "sam2_mask",
                 "image": str(image_path),
                 "input_mask": str(mask_path),
                 "num_input_components": len(components),
-                "num_output_polygons": len(polygons),
-                "output_json": str(json_path),
+                "output_mask": str(mask_output_path),
                 "components": component_logs,
             }
             with (sample_output_dir / "sam2_refinement.json").open("w", encoding="utf-8") as f:
                 json.dump(refinement_log, f, indent=2)
 
-            print(f"  Output polygons: {len(polygons)}")
+            print(f"  Output mask: {mask_output_path}")
             summary_rows.append({
                 "sample": sample_id, "leaf_coverage_percent": coverage,
-                "annotation_mode": "sam2_polygon", "status": "ok",
+                "annotation_mode": "sam2_mask", "status": "ok",
                 "output_dir": str(sample_output_dir), "input_components": len(components),
-                "output_polygons": len(polygons), "output_points": 0, "error": "",
+                "output_masks": 1, "output_points": 0, "error": "",
             })
 
         except Exception as exc:
@@ -395,14 +336,14 @@ def main():
                 "sample": sample_id, "leaf_coverage_percent": coverage,
                 "annotation_mode": mode, "status": "error",
                 "output_dir": str(sample_output_dir), "input_components": "",
-                "output_polygons": "", "output_points": "",
+                "output_masks": "", "output_points": "",
                 "error": f"{type(exc).__name__}: {exc}",
             })
 
     summary_path = output_dir / "sam2_labelme_summary.csv"
     fieldnames = [
         "sample", "leaf_coverage_percent", "annotation_mode", "status",
-        "output_dir", "input_components", "output_polygons", "output_points", "error",
+        "output_dir", "input_components", "output_masks", "output_points", "error",
     ]
     with summary_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)

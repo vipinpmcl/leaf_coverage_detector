@@ -13,17 +13,13 @@ output:
   overwrite: true
 
 # Coverage routing:
-#   coverage < low_threshold_percent -> one negative point annotation
+#   coverage < low_threshold_percent -> empty negative mask
 #   low_threshold_percent <= coverage <= high_threshold_percent -> ignore
-#   coverage > high_threshold_percent -> CoAtNet2 mask + SAM2 polygons
+#   coverage > high_threshold_percent -> CoAtNet2 mask + SAM2 mask refinement
 coverage:
   enabled: true
-  low_threshold_percent: 1.0
-  high_threshold_percent: 100.0
-  negative_label: negative
-  negative_description: "Leaf coverage below low threshold"
-  point_source: mask_centroid
-  empty_mask_fallback: image_center
+  low_threshold_percent: 0
+  high_threshold_percent: 1
 
 sam2:
   checkpoint: /d/Vipin/github_repos/sam2/checkpoints/sam2.1_hiera_large.pt
@@ -35,7 +31,7 @@ sam2:
   autocast_dtype: bfloat16
 
 components:
-  min_area: 1000
+  min_area: 100
   keep_largest_n: 0
 
 refinement:
@@ -44,7 +40,7 @@ refinement:
 
 polygon:
   epsilon_ratio: 0.002
-  min_area: 10000
+  min_area: 100
 
 visualization:
   enabled: false

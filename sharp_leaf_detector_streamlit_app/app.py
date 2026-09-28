@@ -28,10 +28,17 @@ def load_config(path):
 
 
 @st.cache_resource(show_spinner="Loading leaf coverage model...")
-def load_model(config_path, checkpoint_path, foundation_path, device_name):
+def load_model(config_path, device_name):
     cfg = load_config(config_path)
+    model_config = cfg["model"]
+    checkpoint_path = resolve_model_path(
+        model_config["trained_checkpoint"], config_path
+    )
+    foundation_path = resolve_model_path(
+        model_config["foundation_checkpoint"], config_path
+    )
     device = torch.device(device_name)
-    mc = cfg["model"]
+    mc = model_config
     model = CoAtNetLeafDetector(
         foundation_checkpoint=foundation_path,
         model_name=mc["name"],
@@ -65,6 +72,18 @@ def load_model(config_path, checkpoint_path, foundation_path, device_name):
             raise RuntimeError(f"Too many missing checkpoint parameters: {len(missing)}")
     model.eval()
     return model, cfg, device
+
+
+def resolve_model_path(path, config_path):
+    """Resolve a model path from config, supporting config-relative paths."""
+    value = str(path).strip()
+    # Accept /d/path notation in configs created in a Linux/Git Bash environment.
+    if len(value) > 3 and value[0] == "/" and value[1].isalpha() and value[2] == "/":
+        value = f"{value[1].upper()}:{value[2:]}"
+    resolved = Path(value).expanduser()
+    if not resolved.is_absolute():
+        resolved = Path(config_path).expanduser().resolve().parent / resolved
+    return resolved
 
 
 def find_images(folder):
@@ -179,8 +198,6 @@ st.caption("Segmentation + leaf coverage + masked-area image quality analysis")
 with st.sidebar:
     st.header("Model")
     config_path = st.text_input("Inference config", "config.yaml")
-    checkpoint_path = st.text_input("Trained model checkpoint", "checkpoints/best.pt")
-    foundation_path = st.text_input("Foundation checkpoint", "checkpoints/crop_fm1_coatNet2rw224.pth")
     device_choice = st.selectbox("Device", ["auto","cuda","cpu"])
     device_name = ("cuda" if device_choice=="auto" and torch.cuda.is_available() else "cpu" if device_choice=="auto" else device_choice)
     threshold = st.slider("Leaf mask threshold", .05, .95, .60, .01)
@@ -188,13 +205,20 @@ with st.sidebar:
 
 if not Path(config_path).exists():
     st.info(f"Config not found: `{config_path}`"); st.stop()
-if not Path(checkpoint_path).exists():
-    st.info(f"Trained checkpoint not found: `{checkpoint_path}`"); st.stop()
-if not Path(foundation_path).exists():
-    st.info(f"Foundation checkpoint not found: `{foundation_path}`"); st.stop()
 
 try:
-    model,cfg,device = load_model(config_path,checkpoint_path,foundation_path,device_name)
+    cfg = load_config(config_path)
+    checkpoint_path = resolve_model_path(
+        cfg["model"]["trained_checkpoint"], config_path
+    )
+    foundation_path = resolve_model_path(
+        cfg["model"]["foundation_checkpoint"], config_path
+    )
+    if not checkpoint_path.is_file():
+        raise FileNotFoundError(f"Trained checkpoint not found: {checkpoint_path}")
+    if not foundation_path.is_file():
+        raise FileNotFoundError(f"Foundation checkpoint not found: {foundation_path}")
+    model,cfg,device = load_model(config_path,device_name)
 except Exception as exc:
     st.error("Model loading failed."); st.exception(exc); st.stop()
 
@@ -671,6 +695,71 @@ with cluster:
                 st.warning(
                     f"{missing} images could not be copied."
                 )
+
+        # -----------------------------------------------------
+        # Copy predicted masks
+        # -----------------------------------------------------
+
+        if st.button(
+            "🌓 Copy predicted masks into cluster folders",
+            use_container_width=True,
+            key="copy_cluster_predicted_masks",
+        ):
+
+            out = Path(output)
+            visuals = st.session_state.get(
+                "cluster_visuals",
+                [],
+            )
+
+            # Match each clustered image to its in-memory segmentation result.
+            visual_map = {
+                Path(str(name)).name: result
+                for name, _image, result in visuals
+            }
+
+            copied = 0
+            missing = 0
+            progress = st.progress(0)
+            rows = list(df.iterrows())
+
+            for index, (_, row) in enumerate(rows, start=1):
+                image_name = Path(str(row["image"])).name
+                result = visual_map.get(image_name)
+
+                if result is None:
+                    missing += 1
+                    progress.progress(index / len(rows))
+                    continue
+
+                destination_dir = (
+                    out
+                    / f"cluster_{int(row['coverage_cluster'])}"
+                    / "predicted_mask"
+                )
+                destination_dir.mkdir(parents=True, exist_ok=True)
+
+                try:
+                    mask_png = np.asarray(result["mask"], dtype=np.uint8) * 255
+                    destination = destination_dir / f"{Path(image_name).stem}.png"
+                    Image.fromarray(mask_png, mode="L").save(
+                        destination,
+                        format="PNG",
+                    )
+                    copied += 1
+                except Exception as exc:
+                    st.warning(
+                        f"Could not save predicted mask for {image_name}: {exc}"
+                    )
+                    missing += 1
+
+                progress.progress(index / len(rows))
+
+            progress.empty()
+            st.success(f"Copied {copied} predicted masks.")
+
+            if missing:
+                st.warning(f"{missing} predicted masks could not be copied.")
 
         # -----------------------------------------------------
         # Copy overlay images
