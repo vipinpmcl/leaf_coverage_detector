@@ -176,10 +176,13 @@ def main():
         sample_id = sample_dir.name
         mode = sample["mode"]
         coverage = sample["coverage"]
-        # sample_output_dir = output_dir / sample_id #Uncomment this line if you want to save the output in a directory named after the sample ID
-        sample_output_dir = sample_dir #dele
-        output_image_path = sample_output_dir / f"{sample_id}.jpg"
-        mask_output_path = sample_output_dir / f"{sample_id}_mask.png"
+        sample_output_dir = output_dir / sample_id
+        images_dir = sample_output_dir / "images"
+        predicted_masks_dir = sample_output_dir / "predicted_masks"
+        sam2_masks_dir = sample_output_dir / "sam2_mask"
+        output_image_path = images_dir / image_path.name if image_path else images_dir / f"{sample_id}.jpg"
+        predicted_mask_path = predicted_masks_dir / mask_path.name
+        mask_output_path = sam2_masks_dir / f"{sample_id}_mask.png"
 
         print(f"\n[{index}/{len(prepared)}] {sample_id}")
         print(f"  Coverage: {coverage if coverage is not None else 'ERROR'}% -> {mode}")
@@ -207,14 +210,15 @@ def main():
         # images are copied so they can be reviewed/annotated manually in LabelMe.
         if mode == "ignore":
             try:
-                sample_output_dir.mkdir(parents=True, exist_ok=True)
-                if output_cfg.get("copy_image", True):
-                    if args.overwrite or not output_image_path.exists():
-                        shutil.copy2(image_path, output_image_path)
-                else:
-                    output_image_path = image_path
+                images_dir.mkdir(parents=True, exist_ok=True)
+                predicted_masks_dir.mkdir(parents=True, exist_ok=True)
+                sam2_masks_dir.mkdir(parents=True, exist_ok=True)
+                if args.overwrite or not output_image_path.exists():
+                    shutil.copy2(image_path, output_image_path)
+                if args.overwrite or not predicted_mask_path.exists():
+                    shutil.copy2(mask_path, predicted_mask_path)
 
-                print(f"  IGNORE: copied image for manual review -> {output_image_path}")
+                print(f"  IGNORE: copied image -> {output_image_path}")
                 summary_rows.append({
                     "sample": sample_id, "leaf_coverage_percent": coverage,
                     "annotation_mode": "ignore", "status": "ignored_manual_review",
@@ -244,11 +248,13 @@ def main():
             continue
 
         try:
-            sample_output_dir.mkdir(parents=True, exist_ok=True)
-            if output_cfg.get("copy_image", True):
+            images_dir.mkdir(parents=True, exist_ok=True)
+            predicted_masks_dir.mkdir(parents=True, exist_ok=True)
+            sam2_masks_dir.mkdir(parents=True, exist_ok=True)
+            if args.overwrite or not output_image_path.exists():
                 shutil.copy2(image_path, output_image_path)
-            else:
-                output_image_path = image_path
+            if args.overwrite or not predicted_mask_path.exists():
+                shutil.copy2(mask_path, predicted_mask_path)
 
             image_rgb = read_image(image_path)
             original_mask = read_mask(mask_path)
@@ -301,9 +307,9 @@ def main():
             save_mask(mask_output_path, final_mask)
 
             if visualization_cfg.get("enabled", False):
-                save_mask(sample_output_dir / "sam2_refined_mask.png", final_mask)
+                save_mask(sam2_masks_dir / "sam2_refined_mask.png", final_mask)
                 save_overlay(
-                    sample_output_dir / "sam2_overlay.jpg",
+                    sam2_masks_dir / "sam2_overlay.jpg",
                     image_rgb,
                     final_mask,
                     alpha=visualization_cfg.get("alpha", 0.45),
@@ -319,7 +325,7 @@ def main():
                 "output_mask": str(mask_output_path),
                 "components": component_logs,
             }
-            with (sample_output_dir / "sam2_refinement.json").open("w", encoding="utf-8") as f:
+            with (sam2_masks_dir / "sam2_refinement.json").open("w", encoding="utf-8") as f:
                 json.dump(refinement_log, f, indent=2)
 
             print(f"  Output mask: {mask_output_path}")

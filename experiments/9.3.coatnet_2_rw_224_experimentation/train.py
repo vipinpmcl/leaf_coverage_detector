@@ -170,6 +170,7 @@ def main():
         mean=mean,
         std=std,
         require_masks=True,
+        augment=cfg["training"].get("augmentation", False),
     )
 
     val_ds = LeafSegmentationDataset(

@@ -11,6 +11,7 @@ import requests
 import streamlit as st
 import torch
 import yaml
+import cv2
 from PIL import Image
 from sklearn.cluster import KMeans
 from torchvision.transforms import functional as TF
@@ -148,6 +149,65 @@ def png_bytes(arr):
     return buf.getvalue()
 
 
+def process_video(video_bytes, model, cfg, device, threshold, alpha, progress_callback=None, suffix=".mp4"):
+    """Run leaf segmentation on each frame and return an overlaid MP4."""
+    # Use a temporary file so uploaded videos work consistently on Windows.
+    import tempfile
+    temp_path = None
+    capture = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp:
+            temp.write(video_bytes)
+            temp_path = temp.name
+        capture = cv2.VideoCapture(temp_path)
+        if not capture.isOpened():
+            raise ValueError("Could not read this video. Try MP4, AVI, or MOV.")
+
+        fps = capture.get(cv2.CAP_PROP_FPS)
+        if not np.isfinite(fps) or fps <= 0:
+            fps = 25.0
+        width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+        if width <= 0 or height <= 0:
+            raise ValueError("Could not read the video dimensions.")
+
+        output = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+        output_path = output.name
+        output.close()
+        writer = cv2.VideoWriter(
+            output_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height)
+        )
+        if not writer.isOpened():
+            raise RuntimeError("Could not create the output video on this system.")
+        try:
+            processed = 0
+            while True:
+                ok, frame = capture.read()
+                if not ok:
+                    break
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                image = Image.fromarray(rgb)
+                result = predict_image(model, image, cfg, device, threshold)
+                overlay = make_overlay(image, result["mask"], alpha)
+                writer.write(cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
+                processed += 1
+                if progress_callback and frame_count > 0:
+                    progress_callback(min(processed / frame_count, 1.0))
+            if processed == 0:
+                raise ValueError("The uploaded video contains no readable frames.")
+        finally:
+            writer.release()
+        return Path(output_path).read_bytes(), processed, fps
+    finally:
+        if capture is not None:
+            capture.release()
+        if temp_path:
+            Path(temp_path).unlink(missing_ok=True)
+        if 'output_path' in locals():
+            Path(output_path).unlink(missing_ok=True)
+
+
 def show_metrics(m):
     a,b,c,d = st.columns(4)
     a.metric("Leaf coverage", f'{m["leaf_coverage_percent"]:.2f}%')
@@ -222,7 +282,35 @@ try:
 except Exception as exc:
     st.error("Model loading failed."); st.exception(exc); st.stop()
 
-single,batch,cluster = st.tabs(["🖼️ Single Image","📁 Batch Analysis","🧩 Coverage Clustering"])
+single,batch,cluster,video = st.tabs(["🖼️ Single Image","📁 Batch Analysis","🧩 Coverage Clustering","🎞️ Video Overlay"])
+
+with video:
+    st.subheader("Create a leaf overlay from a local video")
+    st.caption("Upload a video from this PC. Each frame is segmented and the overlay is saved as an MP4.")
+    video_file = st.file_uploader("Choose video", type=["mp4", "avi", "mov", "mkv", "webm"], key="video_upload")
+    if video_file:
+        st.video(video_file.getvalue())
+        if st.button("Generate video overlay", type="primary", key="process_video"):
+            progress = st.progress(0)
+            status = st.empty()
+            try:
+                result_bytes, frame_count, fps = process_video(
+                    video_file.getvalue(), model, cfg, device, threshold,
+                    overlay_alpha, progress_callback=progress.progress,
+                    suffix=Path(video_file.name).suffix or ".mp4",
+                )
+                status.success(f"Processed {frame_count} frames at {fps:.2f} FPS.")
+                st.video(result_bytes)
+                st.download_button(
+                    "Download overlaid video",
+                    data=result_bytes,
+                    file_name=f"{Path(video_file.name).stem}_overlay.mp4",
+                    mime="video/mp4",
+                )
+            except Exception as exc:
+                status.error(f"Video processing failed: {exc}")
+            finally:
+                progress.empty()
 
 with single:
     source = st.radio("Input source",["Upload image","Local image path","Internet URL"],horizontal=True)

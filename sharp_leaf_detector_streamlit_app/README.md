@@ -1,6 +1,7 @@
 # Leaf Coverage Detector v2
 
 Adds:
+- local video upload with frame-by-frame leaf overlay and MP4 export
 - local PC folder picker (Tkinter when Streamlit runs locally)
 - folder batch inference
 - clustering by leaf coverage using K-Means

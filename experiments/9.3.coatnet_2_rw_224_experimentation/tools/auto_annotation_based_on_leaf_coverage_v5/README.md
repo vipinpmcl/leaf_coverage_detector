@@ -57,12 +57,14 @@ coverage:
 
 Samples in the middle coverage range are intentionally not auto-annotated. Their **image is still copied** into the output directory so you can open it in LabelMe and annotate it manually. No JSON is generated automatically for these samples.
 
-The copied image uses the same per-sample layout as the other outputs:
+Ignored samples get a cluster folder with all three artifact directories; the image and input prediction mask are copied for review:
 
 ```text
 auto_annotation_output/
-└── <sample-id>/
-    └── <sample-id>.jpg
+└── <cluster-id>/
+    ├── images/<source-image-name>
+    ├── predicted_masks/<source-mask-name>
+    └── sam2_mask/
 ```
 
 The summary CSV records these samples with `status=ignored_manual_review`. With `--overwrite`, the copied image is refreshed.
@@ -73,12 +75,16 @@ Annotated samples use the same v3 layout:
 
 ```text
 auto_annotation_output/
-└── <sample-id>/
-    ├── <sample-id>.jpg
-    └── <sample-id>_mask.png      # low-coverage empty or high-coverage SAM2 mask
+└── <cluster-id>/
+    ├── images/
+    │   └── original.jpg
+    ├── predicted_masks/
+    │   └── mask.png
+    └── sam2_mask/
+        └── <cluster-id>_mask.png  # low-coverage empty or high-coverage SAM2 mask
 ```
 
-Low-coverage masks are all black (`0`) and have the same dimensions as the source mask. High-coverage masks use white (`255`) for foreground and black (`0`) for background.
+Each sample is written into its own cluster folder under the output directory. The source image and predicted mask are copied into their folders. Low-coverage SAM2 masks are all black (`0`) and have the same dimensions as the source mask. High-coverage masks use white (`255`) for foreground and black (`0`) for background.
 
 ## Run
 
