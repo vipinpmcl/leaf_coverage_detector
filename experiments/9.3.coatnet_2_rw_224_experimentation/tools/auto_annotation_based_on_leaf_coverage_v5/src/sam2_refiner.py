@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import cv2
 import numpy as np
 import torch
@@ -19,10 +17,14 @@ class SAM2MaskRefiner:
         multimask_output=True,
         mask_threshold=0.0,
         autocast_dtype="bfloat16",
+        target_pixels_per_prompt=5000,
+        max_points_per_region=16,
     ):
         self.device = device
         self.multimask_output = bool(multimask_output)
         self.mask_threshold = float(mask_threshold)
+        self.target_pixels_per_prompt = max(1, int(target_pixels_per_prompt))
+        self.max_points_per_region = max(1, int(max_points_per_region))
         self.autocast_dtype = self._resolve_dtype(
             autocast_dtype
         )
@@ -63,20 +65,41 @@ class SAM2MaskRefiner:
     def set_image(self, image_rgb):
         self.predictor.set_image(image_rgb)
 
-    @staticmethod
-    def _component_centroid(component):
-        moments = cv2.moments((component > 0).astype(np.uint8))
-        if moments["m00"] == 0:
+    def _component_centroids(self, component):
+        ys, xs = np.nonzero(component)
+        area = len(xs)
+        if area == 0:
             raise ValueError("Cannot prompt SAM2 with an empty component")
-        return (
-            float(moments["m10"] / moments["m00"]),
-            float(moments["m01"] / moments["m00"]),
+
+        count = min(
+            self.max_points_per_region,
+            max(1, int(np.ceil(area / self.target_pixels_per_prompt))),
         )
+        if count == 1:
+            center_x, center_y = xs.mean(), ys.mean()
+            nearest = np.argmin((xs - center_x) ** 2 + (ys - center_y) ** 2)
+            return [(float(xs[nearest]), float(ys[nearest]))]
+
+        # Cluster foreground pixels so each prompt lies inside the predicted
+        # region and covers a different part of large or merged regions.
+        samples = np.column_stack((xs, ys)).astype(np.float32)
+        cv2.setRNGSeed(0)
+        _, _, centers = cv2.kmeans(
+            samples,
+            count,
+            None,
+            (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 50, 0.1),
+            1,
+            cv2.KMEANS_PP_CENTERS,
+        )
+        centroids = []
+        for center_x, center_y in centers:
+            nearest = np.argmin((xs - center_x) ** 2 + (ys - center_y) ** 2)
+            centroids.append((float(xs[nearest]), float(ys[nearest])))
+        return centroids
 
     def refine_component(self, component):
-        point_x, point_y = self._component_centroid(component)
-        point_coords = np.array([[point_x, point_y]], dtype=np.float32)
-        point_labels = np.array([1], dtype=np.int32)
+        centroids = self._component_centroids(component)
 
         autocast_enabled = (
             self.device.startswith("cuda")
@@ -89,40 +112,51 @@ class SAM2MaskRefiner:
                 device_type="cuda",
                 dtype=self.autocast_dtype,
             ):
-                masks, scores, _ = self.predictor.predict(
-                    point_coords=point_coords,
-                    point_labels=point_labels,
+                prompt_results = [
+                    self.predictor.predict(
+                        point_coords=np.array([[x, y]], dtype=np.float32),
+                        point_labels=np.array([1], dtype=np.int32),
+                        multimask_output=self.multimask_output,
+                    )
+                    for x, y in centroids
+                ]
+        else:
+            prompt_results = [
+                self.predictor.predict(
+                    point_coords=np.array([[x, y]], dtype=np.float32),
+                    point_labels=np.array([1], dtype=np.int32),
                     multimask_output=self.multimask_output,
                 )
-        else:
-            masks, scores, _ = self.predictor.predict(
-                point_coords=point_coords,
-                point_labels=point_labels,
-                multimask_output=self.multimask_output,
-            )
+                for x, y in centroids
+            ]
 
-        masks = np.asarray(masks)
-        scores = np.asarray(scores).reshape(-1)
+        combined = np.zeros_like(component, dtype=np.uint8)
+        selected_scores = []
+        unique_masks = set()
+        candidate_counts = []
+        for (point_x, point_y), (masks, scores, _) in zip(centroids, prompt_results):
+            masks = np.asarray(masks)
+            scores = np.asarray(scores).reshape(-1)
+            if masks.ndim == 2:
+                masks = masks[None, ...]
+            selected_index = int(np.argmax(scores))
+            selected_mask = masks[selected_index]
+            if selected_mask.shape != component.shape:
+                selected_mask = cv2.resize(
+                    selected_mask.astype(np.uint8),
+                    (component.shape[1], component.shape[0]),
+                    interpolation=cv2.INTER_NEAREST,
+                )
+            selected_mask = (selected_mask > self.mask_threshold).astype(np.uint8)
+            unique_masks.add(selected_mask.tobytes())
+            combined = np.maximum(combined, selected_mask)
+            selected_scores.append(float(scores[selected_index]))
+            candidate_counts.append(len(masks))
 
-        if masks.ndim == 2:
-            masks = masks[None, ...]
-
-        # SAM2 returns candidate masks in predictor order; select its highest
-        # scoring candidate for this positive point prompt.
-        selected_index = int(np.argmax(scores))
-        selected_mask = masks[selected_index]
-        if selected_mask.shape != component.shape:
-            selected_mask = cv2.resize(
-                selected_mask.astype(np.uint8),
-                (component.shape[1], component.shape[0]),
-                interpolation=cv2.INTER_NEAREST,
-            )
-        selected_mask = (selected_mask > self.mask_threshold).astype(np.uint8)
-
-        return selected_mask, {
-            "prompt_point_x": point_x,
-            "prompt_point_y": point_y,
-            "selected_index": selected_index,
-            "selected_score": float(scores[selected_index]),
-            "num_candidates": len(masks),
+        return combined, {
+            "prompt_points": [{"x": x, "y": y} for x, y in centroids],
+            "num_prompts": len(centroids),
+            "num_unique_masks": len(unique_masks),
+            "selected_scores": selected_scores,
+            "num_candidates_per_prompt": candidate_counts,
         }

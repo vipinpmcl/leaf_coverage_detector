@@ -32,20 +32,20 @@ for CROP in "$@"; do
 
     mkdir -p "$OUTPUT_DIR"
 
-    # 1. Prediction
-    python batch_predict.py \
-        --config "$CONFIG" \
-        --checkpoint "$CHECKPOINT" \
-        --image-dir "$IMAGE_DIR" \
-        --output-dir "$OUTPUT_DIR"
+    # # 1. Prediction
+    # python batch_predict.py \
+    #     --config "$CONFIG" \
+    #     --checkpoint "$CHECKPOINT" \
+    #     --image-dir "$IMAGE_DIR" \
+    #     --output-dir "$OUTPUT_DIR"
 
-    # 2. Calculate leaf coverage
-    python tools/calculate_leaf_coverage.py \
-        --input-dir "$OUTPUT_DIR/" \
-        --output-dir "$OUTPUT_DIR/"
+    # # 2. Calculate leaf coverage
+    # python tools/calculate_leaf_coverage.py \
+    #     --input-dir "$OUTPUT_DIR/" \
+    #     --output-dir "$OUTPUT_DIR/"
 
     # 3. Refine annotations based on leaf coverage
-    python tools/auto_annotation_based_on_leaf_coverage_v5/scripts/refine_batch.py --config tools/auto_annotation_based_on_leaf_coverage_v5/configs/default.yaml --input-dir runs/${EXP_ID}/${CROP,,}/
+    # python tools/auto_annotation_based_on_leaf_coverage_v5/scripts/refine_batch.py --config tools/auto_annotation_based_on_leaf_coverage_v5/configs/default.yaml --input-dir runs/${EXP_ID}/${CROP,,}/
     
     
     # 4. Cluster based on leaf coverage

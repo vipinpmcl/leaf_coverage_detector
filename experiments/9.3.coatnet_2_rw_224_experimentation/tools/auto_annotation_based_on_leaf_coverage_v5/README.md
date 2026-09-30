@@ -98,7 +98,7 @@ python scripts/refine_batch.py \
   --overwrite
 ```
 
-SAM2 is loaded **only if at least one selected sample is in the high-coverage range**. For each connected region in the predicted mask, the tool computes its centroid and sends that location to SAM2 as a positive point prompt, matching the point-click workflow in LabelMe. SAM2's highest-scoring candidate mask is kept for each prompt. Point and ignored samples do not invoke SAM2.
+SAM2 is loaded **only if at least one selected sample is in the high-coverage range**. Each connected region gets one or more positive point prompts based on its pixel area (5,000 pixels per prompt by default, capped at 16). For larger regions, foreground pixels are clustered and each cluster centroid is snapped to a foreground pixel. SAM2's highest-scoring candidate for each point is OR-combined into the output, so identical masks from different points do not change the result. Point and ignored samples do not invoke SAM2.
 
 ## Summary
 

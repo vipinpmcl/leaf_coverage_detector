@@ -160,6 +160,8 @@ def main():
             multimask_output=sam_cfg.get("multimask_output", True),
             mask_threshold=sam_cfg.get("mask_threshold", 0.0),
             autocast_dtype=sam_cfg.get("autocast_dtype", "bfloat16"),
+            target_pixels_per_prompt=sam_cfg.get("target_pixels_per_prompt", 5000),
+            max_points_per_region=sam_cfg.get("max_points_per_region", 16),
         )
     else:
         print("SAM2         : not loaded (no high-coverage samples in this batch)")

@@ -234,34 +234,28 @@ def find_image(image_dir, image_name):
 
 def find_mask(annotation_root, sample_id):
     """
-    Locate the mask PNG for a sample.
+    Locate the SAM2-generated mask PNG for a sample.
 
     Expected structure:
-        sample-id/sample-id.png
-
-    Common mask naming variants are also accepted.
+        sample-id/sam2_mask/<mask-file>.png
     """
-    sample_dir = annotation_root / sample_id
+    sam2_mask_dir = annotation_root / sample_id / "sam2_mask"
+    if not sam2_mask_dir.is_dir():
+        return None
 
-    candidates = [
-        sample_dir / f"{sample_id}.png",
-        sample_dir / f"{sample_id}_mask.png",
-        sample_dir / f"{sample_id}-mask.png",
-        sample_dir / "mask.png",
-    ]
+    candidates = sorted(sam2_mask_dir.glob("*.png"))
+    if not candidates:
+        return None
 
+    # Prefer a mask named for the sample, including the common _mask suffix.
     for candidate in candidates:
-        if candidate.is_file():
+        if candidate.stem.lower() in {
+            sample_id.lower(),
+            f"{sample_id.lower()}_mask",
+        }:
             return candidate
 
-    # Fallback: find a PNG whose name contains the sample id or "mask".
-    if sample_dir.is_dir():
-        for candidate in sample_dir.glob("*.png"):
-            stem = candidate.stem.lower()
-            if sample_id.lower() in stem or "mask" in stem:
-                return candidate
-
-    return None
+    return candidates[0]
 
 
 def main():
@@ -334,6 +328,18 @@ def main():
 
     parser.add_argument(
 
+        "--annotation-root",
+
+        type=Path,
+
+        default=None,
+
+        help="Directory containing per-sample annotation folders",
+
+    )
+
+    parser.add_argument(
+
         "--copy",
 
         action="store_true",
@@ -355,6 +361,16 @@ def main():
     output_dir = args.output_dir
 
     n_clusters = args.n_clusters
+    annotation_root = args.annotation_root
+    if annotation_root is None:
+        default_annotation_root = (
+            Path(__file__).resolve().parent.parent / "auto_annotation_output"
+        )
+        annotation_root = (
+            default_annotation_root
+            if default_annotation_root.is_dir()
+            else output_dir.parent
+        )
 
 
 
@@ -831,19 +847,40 @@ def main():
 
 
                 sample_id = source_image.stem
+                sample_dir = None
+                # Annotation exports store images as
+                # <sample-id>/images/original.jpg; use the enclosing sample
+                # directory because its name can differ from original.jpg.
+                if source_image.parent.name.lower() == "images":
+                    possible_sample_dir = source_image.parent.parent
+                    if (possible_sample_dir / "sam2_mask").is_dir() or (
+                        possible_sample_dir / "predicted_masks"
+                    ).is_dir():
+                        sample_dir = possible_sample_dir
+                        sample_id = sample_dir.name
 
-                # output_dir is .../clusters_output, so its parent is
-                # the annotation root containing each sample-id folder.
-                annotation_root = output_dir.parent
+                # If the image is inside an annotation sample folder, use
+                # that folder's root; otherwise use the configured root.
+                sample_annotation_root = (
+                    sample_dir.parent if sample_dir is not None
+                    else annotation_root
+                )
 
                 # Copy the corresponding SAM2 mask as
                 # cluster_n/sam2_masks/sample_id.png.
                 source_mask = find_mask(
-                    annotation_root,
+                    sample_annotation_root,
                     sample_id,
                 )
+                predicted_mask = (
+                    sample_annotation_root / sample_id / "predicted_masks" / "mask.png"
+                )
+                sam2_fallback = source_mask is None and predicted_mask.is_file()
+                mask_to_copy = source_mask or (
+                    predicted_mask if sam2_fallback else None
+                )
 
-                if source_mask is not None:
+                if mask_to_copy is not None:
                     sam2_masks_dir = cluster_dir / "sam2_masks"
                     sam2_masks_dir.mkdir(
                         parents=True,
@@ -856,37 +893,38 @@ def main():
                     )
 
                     shutil.copy2(
-                        str(source_mask),
+                        str(mask_to_copy),
                         str(destination_mask),
                     )
 
-                    # Also copy the sample folder's mask.png into
-                    # predicted_mask using the sample ID as its filename.
-                    predicted_mask = annotation_root / sample_id / "mask.png"
-                    if predicted_mask.is_file():
-                        predicted_mask_dir = cluster_dir / "predicted_mask"
-                        predicted_mask_dir.mkdir(
-                            parents=True,
-                            exist_ok=True,
-                        )
-                        shutil.copy2(
-                            str(predicted_mask),
-                            str(predicted_mask_dir / f"{sample_id}.png"),
+                    masks_copied += 1
+                    if sam2_fallback:
+                        print(
+                            f"  SAM2 mask missing for {sample_id}; copied "
+                            f"predicted mask as fallback: {predicted_mask}"
                         )
                     else:
-                        print(
-                            f"WARNING: predicted mask not found: "
-                            f"{predicted_mask}"
-                        )
-
-                    masks_copied += 1
+                        print(f"  Copied SAM2 mask: {source_mask.name}")
+                else:
                     print(
-                        f"  Copied mask: {source_mask.name}"
+                        f"WARNING: SAM2 mask PNG not found for {sample_id}: "
+                        f"{sample_annotation_root / sample_id / 'sam2_mask'}"
+                    )
+
+                if predicted_mask.is_file():
+                    predicted_mask_dir = cluster_dir / "predicted_mask"
+                    predicted_mask_dir.mkdir(
+                        parents=True,
+                        exist_ok=True,
+                    )
+                    shutil.copy2(
+                        str(predicted_mask),
+                        str(predicted_mask_dir / f"{sample_id}.png"),
                     )
                 else:
                     print(
-                        f"WARNING: Mask PNG not found: "
-                        f"{source_mask}"
+                        f"WARNING: predicted mask not found: "
+                        f"{predicted_mask}"
                     )
 
 
