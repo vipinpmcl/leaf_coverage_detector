@@ -11,6 +11,7 @@ import numpy as np
 import yaml
 import os
 import re
+import cv2
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -25,6 +26,28 @@ from src.visualization import save_mask, save_overlay  # noqa: E402
 def load_config(path):
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+def save_extracted_leaf_image(image_path, mask_path, output_path):
+    image_rgb = read_image(image_path)
+    # Extraction is based only on SAM2 output. A missing SAM2 mask means
+    # there is no valid extracted image to keep.
+    if not Path(mask_path).exists():
+        output_path.unlink(missing_ok=True)
+        return
+    sam2_mask = read_mask(mask_path)
+    if image_rgb.shape[:2] != sam2_mask.shape[:2]:
+        raise RuntimeError(
+            f"Image/mask dimensions differ: {image_rgb.shape[:2]} vs {sam2_mask.shape[:2]}"
+        )
+    extracted_leaf = np.full_like(image_rgb, 255)
+    extracted_leaf[sam2_mask > 0] = image_rgb[sam2_mask > 0]
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if not cv2.imwrite(
+        str(output_path),
+        cv2.cvtColor(extracted_leaf, cv2.COLOR_RGB2BGR),
+    ):
+        raise RuntimeError(f"Could not write extracted leaf image: {output_path}")
 
 
 def resolve_path(path, config_path):
@@ -180,9 +203,11 @@ def main():
         images_dir = sample_output_dir / "images"
         predicted_masks_dir = sample_output_dir / "predicted_masks"
         sam2_masks_dir = sample_output_dir / "sam2_mask"
+        extracted_leaf_masks_dir = sample_output_dir / "extracted_object_images"
         output_image_path = images_dir / image_path.name if image_path else images_dir / f"{sample_id}.jpg"
         predicted_mask_path = predicted_masks_dir / mask_path.name
         mask_output_path = sam2_masks_dir / f"{sample_id}_mask.png"
+        extracted_leaf_path = extracted_leaf_masks_dir / image_path.name if image_path else extracted_leaf_masks_dir / f"{sample_id}.jpg"
 
         print(f"\n[{index}/{len(prepared)}] {sample_id}")
         print(f"  Coverage: {coverage if coverage is not None else 'ERROR'}% -> {mode}")
@@ -237,7 +262,47 @@ def main():
             continue
 
         expected_output_path = mask_output_path
-        if expected_output_path.exists() and not args.overwrite:
+        if (
+            mode == "sam2_mask"
+            and not expected_output_path.exists()
+            and extracted_leaf_path.exists()
+            and not args.overwrite
+        ):
+            extracted_leaf_path.unlink()
+
+        if (
+            mode == "sam2_mask"
+            and expected_output_path.exists()
+            and not extracted_leaf_path.exists()
+            and not args.overwrite
+        ):
+            try:
+                save_extracted_leaf_image(
+                    image_path,
+                    expected_output_path,
+                    extracted_leaf_path,
+                )
+                print(f"  Reused existing SAM2 mask: {expected_output_path}")
+                print(f"  Extracted leaf image: {extracted_leaf_path}")
+                summary_rows.append({
+                    "sample": sample_id, "leaf_coverage_percent": coverage,
+                    "annotation_mode": mode, "status": "ok_existing_sam2_mask",
+                    "output_dir": str(sample_output_dir), "input_components": "",
+                    "output_masks": 1, "output_points": 0, "error": "",
+                })
+            except Exception as exc:
+                print(f"  ERROR extracting from existing SAM2 mask: {type(exc).__name__}: {exc}")
+                summary_rows.append({
+                    "sample": sample_id, "leaf_coverage_percent": coverage,
+                    "annotation_mode": mode, "status": "error",
+                    "output_dir": str(sample_output_dir), "input_components": "",
+                    "output_masks": "", "output_points": "",
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
+            continue
+
+        if (expected_output_path.exists() and extracted_leaf_path.exists()
+                and not args.overwrite):
             print(f"  SKIP: output already exists ({expected_output_path.name})")
             summary_rows.append({
                 "sample": sample_id, "leaf_coverage_percent": coverage,
@@ -275,6 +340,7 @@ def main():
                 continue
 
             # High coverage: existing CoAtNet2 -> SAM2 -> binary mask PNG.
+            extracted_leaf_masks_dir.mkdir(parents=True, exist_ok=True)
             components = connected_components(
                 original_mask,
                 min_area=component_cfg.get("min_area", 10000),
@@ -305,6 +371,9 @@ def main():
 
             save_mask(mask_output_path, final_mask)
 
+            # Keep only SAM2-positive image pixels; use pure white elsewhere.
+            save_extracted_leaf_image(image_path, mask_output_path, extracted_leaf_path)
+
             if visualization_cfg.get("enabled", False):
                 save_mask(sam2_masks_dir / "sam2_refined_mask.png", final_mask)
                 save_overlay(
@@ -328,6 +397,7 @@ def main():
                 json.dump(refinement_log, f, indent=2)
 
             print(f"  Output mask: {mask_output_path}")
+            print(f"  Extracted leaf image: {extracted_leaf_path}")
             summary_rows.append({
                 "sample": sample_id, "leaf_coverage_percent": coverage,
                 "annotation_mode": "sam2_mask", "status": "ok",

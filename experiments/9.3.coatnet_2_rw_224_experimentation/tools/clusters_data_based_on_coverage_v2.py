@@ -258,6 +258,38 @@ def find_mask(annotation_root, sample_id):
     return candidates[0]
 
 
+def copy_extracted_object_image(annotation_root, sample_id, cluster_dir):
+    """Copy the sample's extracted object image as <sample-id>.jpg."""
+    source_dir = annotation_root / sample_id / "extracted_object_images"
+    if not source_dir.is_dir():
+        return None
+
+    candidates = sorted(
+        path for path in source_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS
+    )
+    if not candidates:
+        return None
+
+    source_image = next(
+        (path for path in candidates if path.stem.lower() == sample_id.lower()),
+        candidates[0],
+    )
+    destination_dir = cluster_dir / "extracted_object_images"
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    destination_image = destination_dir / f"{sample_id}.jpg"
+
+    if source_image.suffix.lower() in {".jpg", ".jpeg"}:
+        shutil.copy2(source_image, destination_image)
+    else:
+        from PIL import Image
+
+        with Image.open(source_image) as image:
+            image.convert("RGB").save(destination_image, format="JPEG")
+
+    return destination_image
+
+
 def main():
 
 
@@ -926,6 +958,14 @@ def main():
                         f"WARNING: predicted mask not found: "
                         f"{predicted_mask}"
                     )
+
+                extracted_image = copy_extracted_object_image(
+                    sample_annotation_root,
+                    sample_id,
+                    cluster_dir,
+                )
+                if extracted_image is not None:
+                    print(f"  Copied extracted object image: {extracted_image}")
 
 
             except Exception as e:

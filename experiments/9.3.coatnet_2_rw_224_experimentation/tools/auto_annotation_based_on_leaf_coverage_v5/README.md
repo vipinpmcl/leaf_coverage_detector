@@ -80,11 +80,13 @@ auto_annotation_output/
     │   └── original.jpg
     ├── predicted_masks/
     │   └── mask.png
-    └── sam2_mask/
+    ├── sam2_mask/
         └── <cluster-id>_mask.png  # low-coverage empty or high-coverage SAM2 mask
+    └── extracted_object_images/
+        └── original.jpg           # SAM2-positive pixels on white background
 ```
 
-Each sample is written into its own cluster folder under the output directory. The source image and predicted mask are copied into their folders. Low-coverage SAM2 masks are all black (`0`) and have the same dimensions as the source mask. High-coverage masks use white (`255`) for foreground and black (`0`) for background.
+Each sample is written into its own cluster folder under the output directory. The source image and predicted mask are copied into their folders. Low-coverage SAM2 masks are all black (`0`) and have the same dimensions as the source mask. High-coverage masks use white (`255`) for foreground and black (`0`) for background. High-coverage samples also get an `extracted_object_images` image containing source pixels selected by the final SAM2 mask on a white background.
 
 ## Run
 
