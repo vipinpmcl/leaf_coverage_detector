@@ -771,13 +771,12 @@ def main():
 
 
 
-            destination = (
-
-                cluster_dir /
-
-                source_image.name
-
+            images_dir = cluster_dir / "images"
+            images_dir.mkdir(
+                parents=True,
+                exist_ok=True,
             )
+            destination = images_dir / source_image.name
 
 
 

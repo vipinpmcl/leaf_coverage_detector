@@ -2,13 +2,13 @@
 
 set -e
 
-EXP_ID="exp11_9"
+EXP_ID="exp14_1"
 CONFIG="runs/${EXP_ID}/config.yaml"
 CHECKPOINT="runs/${EXP_ID}/best.pt"
 
 # BASE_DATA="../../../../datasets/20CropData/20Crops200Samples_Watermarked/20Crops200Samples_Watermarked"
+# BASE_DATA="../../../../datasets/disease_august/Potato/Potato___healthy"
 BASE_DATA="data/20crop200samples_leaf_coverage_data/2.test/"
-# BASE_DATA="data/2.test/"
 
 
 for CROP in "$@"; do

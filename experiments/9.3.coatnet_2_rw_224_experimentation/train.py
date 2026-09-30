@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import sys
 from pathlib import Path
 
 import torch
@@ -14,6 +15,22 @@ from utils.data import LeafSegmentationDataset, discover_images, split_paths
 from utils.losses import bce_dice_loss
 from utils.metrics import segmentation_metrics
 from utils.checkpoint import save_checkpoint
+
+
+class Tee:
+    """Write console output to both the terminal and the run log."""
+
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, message):
+        for stream in self.streams:
+            stream.write(message)
+            stream.flush()
+
+    def flush(self):
+        for stream in self.streams:
+            stream.flush()
 
 
 def load_config(path):
@@ -118,8 +135,12 @@ def main():
     masks_dir = Path(args.masks)
     out_dir = Path(args.output)
 
-    # Create output directory first
+    # Create output directory first, then capture stdout/stderr (including tqdm)
+    # so the complete console transcript is preserved for this run.
     out_dir.mkdir(parents=True, exist_ok=True)
+    log_file = (out_dir / "training.log").open("w", encoding="utf-8", buffering=1)
+    sys.stdout = Tee(sys.__stdout__, log_file)
+    sys.stderr = Tee(sys.__stderr__, log_file)
 
     # ---------------------------------------------------------
     # Load configuration
@@ -360,6 +381,7 @@ def main():
             optimizer,
             epoch,
             metrics,
+            config=cfg,
         )
 
         # -----------------------------------------------------
@@ -376,6 +398,7 @@ def main():
                 optimizer,
                 epoch,
                 metrics,
+                config=cfg,
             )
 
             print("  -> saved best.pt")

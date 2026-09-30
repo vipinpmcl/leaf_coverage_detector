@@ -12,7 +12,7 @@ LOW_THRESHOLD <= leaf coverage <= HIGH_THRESHOLD
         -> IGNORE auto-annotation, COPY IMAGE for manual LabelMe review
 
 leaf coverage > HIGH_THRESHOLD and <= 100%
-        -> CoAtNet2 mask -> SAM2 refinement -> binary MASK PNG
+        -> CoAtNet2 regions -> centroid point prompts -> SAM2 masks -> binary MASK PNG
 ```
 
 The boundary convention above deliberately removes gaps at exactly the configured thresholds. Thus, if `low=5` and `high=20`:
@@ -98,7 +98,7 @@ python scripts/refine_batch.py \
   --overwrite
 ```
 
-SAM2 is loaded **only if at least one selected sample is in the high-coverage range**. Point and ignored samples do not invoke SAM2.
+SAM2 is loaded **only if at least one selected sample is in the high-coverage range**. For each connected region in the predicted mask, the tool computes its centroid and sends that location to SAM2 as a positive point prompt, matching the point-click workflow in LabelMe. SAM2's highest-scoring candidate mask is kept for each prompt. Point and ignored samples do not invoke SAM2.
 
 ## Summary
 

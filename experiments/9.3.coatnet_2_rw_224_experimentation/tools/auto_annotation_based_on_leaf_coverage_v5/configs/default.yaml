@@ -26,17 +26,14 @@ sam2:
   model_cfg: /d/Vipin/github_repos/sam2/sam2/configs/sam2.1/sam2.1_hiera_l.yaml
   multimask_output: true
   mask_threshold: 0.0
-  prompt_logit_abs_value: 10.0
-  prompt_size: [256, 256]
   autocast_dtype: bfloat16
 
 components:
-  min_area: 100
+  min_area: 1000
   keep_largest_n: 0
 
 refinement:
-  min_prompt_overlap: 0.30
-  remove_small_components: 100
+  remove_small_components: 1000
 
 polygon:
   epsilon_ratio: 0.002

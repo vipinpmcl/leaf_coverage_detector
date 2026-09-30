@@ -2,7 +2,7 @@ from pathlib import Path
 import torch
 
 
-def save_checkpoint(path, model, optimizer=None, epoch=None, metrics=None):
+def save_checkpoint(path, model, optimizer=None, epoch=None, metrics=None, config=None):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -11,6 +11,11 @@ def save_checkpoint(path, model, optimizer=None, epoch=None, metrics=None):
         "epoch": epoch,
         "metrics": metrics or {},
     }
+
+    if config is not None:
+        # Keep the resolved configuration alongside weights so a checkpoint is
+        # self-describing even after the run directory has moved.
+        payload["config"] = config
 
     if optimizer is not None:
         payload["optimizer"] = optimizer.state_dict()

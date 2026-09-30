@@ -18,18 +18,11 @@ class SAM2MaskRefiner:
         device="cuda",
         multimask_output=True,
         mask_threshold=0.0,
-        prompt_logit_abs_value=10.0,
-        prompt_size=(256, 256),
         autocast_dtype="bfloat16",
     ):
         self.device = device
         self.multimask_output = bool(multimask_output)
         self.mask_threshold = float(mask_threshold)
-        self.prompt_logit_abs_value = float(
-            prompt_logit_abs_value
-        )
-        self.prompt_size = tuple(prompt_size)
-
         self.autocast_dtype = self._resolve_dtype(
             autocast_dtype
         )
@@ -70,54 +63,20 @@ class SAM2MaskRefiner:
     def set_image(self, image_rgb):
         self.predictor.set_image(image_rgb)
 
-    def _component_to_prompt_logits(self, component):
-        h, w = component.shape
-
-        prompt_h, prompt_w = self.prompt_size
-
-        resized = cv2.resize(
-            component.astype(np.uint8),
-            (prompt_w, prompt_h),
-            interpolation=cv2.INTER_NEAREST,
-        )
-
-        a = self.prompt_logit_abs_value
-
-        logits = np.where(
-            resized > 0,
-            a,
-            -a,
-        ).astype(np.float32)
-
-        return logits[None, ...]
-
     @staticmethod
-    def _overlap(mask, prompt):
-        prompt_bool = prompt > 0
-        mask_bool = mask > 0
-
-        prompt_area = int(prompt_bool.sum())
-
-        if prompt_area == 0:
-            return 0.0
-
-        intersection = int(
-            np.logical_and(
-                mask_bool,
-                prompt_bool,
-            ).sum()
+    def _component_centroid(component):
+        moments = cv2.moments((component > 0).astype(np.uint8))
+        if moments["m00"] == 0:
+            raise ValueError("Cannot prompt SAM2 with an empty component")
+        return (
+            float(moments["m10"] / moments["m00"]),
+            float(moments["m01"] / moments["m00"]),
         )
 
-        return intersection / prompt_area
-
-    def refine_component(
-        self,
-        component,
-        min_prompt_overlap=0.30,
-    ):
-        prompt_logits = self._component_to_prompt_logits(
-            component
-        )
+    def refine_component(self, component):
+        point_x, point_y = self._component_centroid(component)
+        point_coords = np.array([[point_x, point_y]], dtype=np.float32)
+        point_labels = np.array([1], dtype=np.int32)
 
         autocast_enabled = (
             self.device.startswith("cuda")
@@ -131,12 +90,14 @@ class SAM2MaskRefiner:
                 dtype=self.autocast_dtype,
             ):
                 masks, scores, _ = self.predictor.predict(
-                    mask_input=prompt_logits,
+                    point_coords=point_coords,
+                    point_labels=point_labels,
                     multimask_output=self.multimask_output,
                 )
         else:
             masks, scores, _ = self.predictor.predict(
-                mask_input=prompt_logits,
+                point_coords=point_coords,
+                point_labels=point_labels,
                 multimask_output=self.multimask_output,
             )
 
@@ -146,76 +107,22 @@ class SAM2MaskRefiner:
         if masks.ndim == 2:
             masks = masks[None, ...]
 
-        prompt = component
-
-        candidates = []
-
-        for i in range(len(masks)):
-            candidate = masks[i]
-
-            if candidate.shape != component.shape:
-                candidate = cv2.resize(
-                    candidate.astype(np.uint8),
-                    (
-                        component.shape[1],
-                        component.shape[0],
-                    ),
-                    interpolation=cv2.INTER_NEAREST,
-                )
-
-            candidate = (
-                candidate > self.mask_threshold
-            ).astype(np.uint8)
-
-            overlap = self._overlap(
-                candidate,
-                prompt,
+        # SAM2 returns candidate masks in predictor order; select its highest
+        # scoring candidate for this positive point prompt.
+        selected_index = int(np.argmax(scores))
+        selected_mask = masks[selected_index]
+        if selected_mask.shape != component.shape:
+            selected_mask = cv2.resize(
+                selected_mask.astype(np.uint8),
+                (component.shape[1], component.shape[0]),
+                interpolation=cv2.INTER_NEAREST,
             )
+        selected_mask = (selected_mask > self.mask_threshold).astype(np.uint8)
 
-            candidates.append(
-                {
-                    "index": i,
-                    "mask": candidate,
-                    "score": float(scores[i]),
-                    "overlap": float(overlap),
-                }
-            )
-
-        accepted = [
-            item
-            for item in candidates
-            if item["overlap"] >= float(
-                min_prompt_overlap
-            )
-        ]
-
-        if accepted:
-            selected = max(
-                accepted,
-                key=lambda item: (
-                    item["score"],
-                    item["overlap"],
-                ),
-            )
-        else:
-            selected = max(
-                candidates,
-                key=lambda item: (
-                    item["score"],
-                    item["overlap"],
-                ),
-            )
-
-        return selected["mask"], {
-            "selected_index": int(
-                selected["index"]
-            ),
-            "selected_score": float(
-                selected["score"]
-            ),
-            "selected_overlap": float(
-                selected["overlap"]
-            ),
-            "num_candidates": len(candidates),
-            "num_accepted": len(accepted),
+        return selected_mask, {
+            "prompt_point_x": point_x,
+            "prompt_point_y": point_y,
+            "selected_index": selected_index,
+            "selected_score": float(scores[selected_index]),
+            "num_candidates": len(masks),
         }

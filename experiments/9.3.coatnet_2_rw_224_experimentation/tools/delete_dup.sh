@@ -1,0 +1,1 @@
+find . -type f  -regextype posix-extended -regex '.*/[^/]+_2\.[A-Za-z0-9]+$'

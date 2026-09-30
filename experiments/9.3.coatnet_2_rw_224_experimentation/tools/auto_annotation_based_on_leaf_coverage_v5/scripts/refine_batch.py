@@ -159,8 +159,6 @@ def main():
             device=device,
             multimask_output=sam_cfg.get("multimask_output", True),
             mask_threshold=sam_cfg.get("mask_threshold", 0.0),
-            prompt_logit_abs_value=sam_cfg.get("prompt_logit_abs_value", 10.0),
-            prompt_size=sam_cfg.get("prompt_size", [256, 256]),
             autocast_dtype=sam_cfg.get("autocast_dtype", "bfloat16"),
         )
     else:
@@ -290,7 +288,6 @@ def main():
                 for comp_index, component in enumerate(components):
                     refined, info = refiner.refine_component(
                         component,
-                        min_prompt_overlap=refinement_cfg.get("min_prompt_overlap", 0.30),
                     )
                     final_mask = np.maximum(final_mask, refined)
                     component_logs.append({
