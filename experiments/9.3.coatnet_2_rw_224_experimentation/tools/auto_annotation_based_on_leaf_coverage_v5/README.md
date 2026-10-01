@@ -71,6 +71,12 @@ The summary CSV records these samples with `status=ignored_manual_review`. With 
 
 ## Output
 
+At the start of each run, the configured output directory (default:
+`auto_annotation_output/`) is cleared and recreated. This prevents results from
+earlier batches from being mixed with the current batch. Keep the input directory
+separate from the output directory; the script refuses overlapping input/output
+paths before clearing anything.
+
 Annotated samples use the same v3 layout:
 
 ```text

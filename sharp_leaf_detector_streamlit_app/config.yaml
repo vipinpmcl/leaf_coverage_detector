@@ -1,7 +1,7 @@
 model:
   name: coatnet_2_rw_224
   foundation_checkpoint: /d/Vipin/projects/leaf_coverage_detector/experiments/9.3.coatnet_2_rw_224_experimentation/checkpoints/crop_fm1_coatNet2rw224.pth
-  trained_checkpoint: /d/Vipin/projects/leaf_coverage_detector/experiments/9.3.coatnet_2_rw_224_experimentation/runs/exp14_3/best.pt
+  trained_checkpoint: /d/Vipin/projects/leaf_coverage_detector/experiments/9.3.coatnet_2_rw_224_experimentation/runs/exp14_6_added_grass_bg/best.pt
   out_indices: [1, 2, 3, 4]
   backbone_channels: [128, 256, 512, 1024]
   adapter_channels: [128, 256, 128, 96]

@@ -114,6 +114,25 @@ def main():
     )
     if not output_dir.is_absolute():
         output_dir = (Path.cwd() / output_dir).resolve()
+
+    if output_dir.is_symlink():
+        raise ValueError(f"Refusing to clear symlink output directory: {output_dir}")
+    input_dir = Path(args.input_dir).resolve()
+    resolved_output_dir = output_dir.resolve()
+    if (
+        resolved_output_dir == input_dir
+        or resolved_output_dir in input_dir.parents
+        or input_dir in resolved_output_dir.parents
+    ):
+        raise ValueError(
+            f"Input and output directories must not overlap; refusing to clear output dir: {resolved_output_dir}"
+        )
+
+    # Each run represents a complete batch. Remove prior results first so
+    # samples absent from this run cannot remain in the output by accident.
+    if resolved_output_dir.exists():
+        shutil.rmtree(resolved_output_dir)
+    output_dir = resolved_output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
     low_threshold = float(coverage_cfg.get("low_threshold_percent", 5.0))
