@@ -29,6 +29,9 @@ sam2:
   autocast_dtype: bfloat16
   target_pixels_per_prompt: 5000
   max_points_per_region: 16
+  blur_filter_enabled: true
+  blur_min_laplacian_variance: 20.0
+  blur_patch_size: 31
 
 components:
   min_area: 1000

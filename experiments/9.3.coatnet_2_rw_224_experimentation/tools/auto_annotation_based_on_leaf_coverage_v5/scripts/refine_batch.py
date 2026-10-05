@@ -204,6 +204,9 @@ def main():
             autocast_dtype=sam_cfg.get("autocast_dtype", "bfloat16"),
             target_pixels_per_prompt=sam_cfg.get("target_pixels_per_prompt", 5000),
             max_points_per_region=sam_cfg.get("max_points_per_region", 16),
+            blur_filter_enabled=sam_cfg.get("blur_filter_enabled", True),
+            blur_min_laplacian_variance=sam_cfg.get("blur_min_laplacian_variance", 20.0),
+            blur_patch_size=sam_cfg.get("blur_patch_size", 31),
         )
     else:
         print("SAM2         : not loaded (no high-coverage samples in this batch)")

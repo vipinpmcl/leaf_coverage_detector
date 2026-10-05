@@ -2,13 +2,13 @@
 
 set -e
 
-EXP_ID="exp14_4"
+EXP_ID="exp14_7_pigeonpea_soybean_rep_images_added"
 CONFIG="runs/${EXP_ID}/config.yaml"
 CHECKPOINT="runs/${EXP_ID}/best.pt"
 
 # BASE_DATA="../../../../datasets/20CropData/20Crops200Samples_Watermarked/20Crops200Samples_Watermarked"
 # BASE_DATA="../../../../datasets/disease_august/Potato/Potato___healthy"
-BASE_DATA="data/disease_aug_data_temp/"
+BASE_DATA="data/disease_aug_data_temp/cotton_mix_dinov2_hier/"
 
 
 for CROP in "$@"; do
@@ -56,7 +56,7 @@ for CROP in "$@"; do
         --csv "$OUTPUT_DIR/leaf_coverage.csv" \
         --image-dir "$IMAGE_DIR" \
         --output-dir "$OUTPUT_DIR/clusters_output_sam2_0_1_0p6" \
-        --n-clusters 4 \
+        --n-clusters 2 \
         --copy
 
     echo ""

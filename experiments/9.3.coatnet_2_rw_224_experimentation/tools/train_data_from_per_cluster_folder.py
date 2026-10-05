@@ -10,7 +10,7 @@ def main():
     parser = argparse.ArgumentParser(
         description=(
             "Create train/test dataset by selecting "
-            "one image from each cluster."
+            "select images from each cluster for training and copy remaining images to test."
         )
     )
 
@@ -35,7 +35,23 @@ def main():
         )
     )
 
+    parser.add_argument(
+        "--images-per-cluster",
+        type=int,
+        default=1,
+        help="Number of training images to select per cluster (default: 1)"
+    )
+
+    parser.add_argument(
+        "--skip-test-copy",
+        action="store_true",
+        help="Do not copy remaining images into the test folder"
+    )
+
     args = parser.parse_args()
+
+    if args.images_per_cluster < 1:
+        parser.error("--images-per-cluster must be at least 1")
 
     # ==================================================
     # Paths
@@ -132,7 +148,7 @@ def main():
         train_candidates = df.copy()
 
     # ==================================================
-    # Select ONE image per cluster
+    # Select the requested number of images per cluster
     # ==================================================
 
     selected_train = (
@@ -142,10 +158,11 @@ def main():
         )
         .groupby(
             "cluster",
-            sort=True
+            sort=True,
+            group_keys=False
         )
-        .first()
-        .reset_index()
+        .head(args.images_per_cluster)
+        .reset_index(drop=True)
     )
 
     # ==================================================
@@ -255,6 +272,9 @@ def main():
     print("-" * 70)
 
     for _, row in test_df.iterrows():
+
+        if args.skip_test_copy:
+            continue
 
         source = Path(
             str(row["image_path"])
@@ -407,6 +427,9 @@ def main():
     print(
         f"Test images     : {len(test_manifest)}"
     )
+
+    if args.skip_test_copy:
+        print("Test image copying was skipped (--skip-test-copy).")
 
     print(
         f"Output          : {output_root}"

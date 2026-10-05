@@ -106,7 +106,7 @@ python scripts/refine_batch.py \
   --overwrite
 ```
 
-SAM2 is loaded **only if at least one selected sample is in the high-coverage range**. Each connected region gets one or more positive point prompts based on its pixel area (5,000 pixels per prompt by default, capped at 16). For larger regions, foreground pixels are clustered and each cluster centroid is snapped to a foreground pixel. SAM2's highest-scoring candidate for each point is OR-combined into the output, so identical masks from different points do not change the result. Point and ignored samples do not invoke SAM2.
+SAM2 is loaded **only if at least one selected sample is in the high-coverage range**. Each connected region gets one or more positive point prompts based on its pixel area (5,000 pixels per prompt by default, capped at 16). For larger regions, foreground pixels are clustered and each cluster centroid is snapped to a foreground pixel. Before prompting SAM2, a local Laplacian-variance sharpness check filters blurry centroid neighborhoods (31-pixel patch and threshold 20 by default); tune `blur_min_laplacian_variance` for the image scale or set `blur_filter_enabled: false` to disable it. If every prompt for a region is rejected as blurry, that region produces no SAM2 mask. SAM2's highest-scoring candidate for each accepted point is OR-combined into the output, so identical masks from different points do not change the result. Point and ignored samples do not invoke SAM2.
 
 ## Summary
 
