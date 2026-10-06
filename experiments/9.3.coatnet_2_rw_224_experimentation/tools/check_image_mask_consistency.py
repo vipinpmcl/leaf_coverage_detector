@@ -55,6 +55,11 @@ def main() -> int:
         action="store_true",
         help="Pair by basename stem only, ignoring subdirectory paths",
     )
+    parser.add_argument(
+        "--remove-unpaired",
+        action="store_true",
+        help="Delete images without masks and masks without images after listing them",
+    )
     args = parser.parse_args()
 
     images_root = args.images.expanduser().resolve()
@@ -81,7 +86,6 @@ def main() -> int:
     duplicate_images = {key: paths for key, paths in image_map.items() if len(paths) > 1}
     duplicate_masks = {key: paths for key, paths in mask_map.items() if len(paths) > 1}
 
-    issues = bool(missing_masks or missing_images or duplicate_images or duplicate_masks)
     print(f"Images: {len(images)} supported, {len(unsupported_images)} unsupported")
     print(f"Masks:  {len(masks)} supported, {len(unsupported_masks)} unsupported")
     print(f"Matching rule: {'filename stem' if args.by_stem else 'relative path and filename stem'}")
@@ -94,6 +98,18 @@ def main() -> int:
         print(f"\nMasks without images ({len(missing_images)}):")
         for key in missing_images:
             print(f"  {key}  [mask: {describe(mask_map[key][0], masks_root)}]")
+
+    if args.remove_unpaired and (missing_masks or missing_images):
+        removed_images = [path for key in missing_masks for path in image_map[key]]
+        removed_masks = [path for key in missing_images for path in mask_map[key]]
+        for path in removed_images + removed_masks:
+            path.unlink()
+        print(
+            f"\nRemoved {len(removed_images)} unpaired image(s) and "
+            f"{len(removed_masks)} unpaired mask(s)."
+        )
+        missing_masks = []
+        missing_images = []
     if duplicate_images:
         print(f"\nDuplicate image keys ({len(duplicate_images)}):")
         for key, paths in sorted(duplicate_images.items()):
@@ -110,7 +126,7 @@ def main() -> int:
         for path in unsupported_masks:
             print(f"  mask:  {describe(path, masks_root)}")
 
-    if issues:
+    if missing_masks or missing_images or duplicate_images or duplicate_masks:
         print("\nResult: inconsistencies found.")
         return 1
     print("\nResult: every image has exactly one matching mask, and every mask has an image.")

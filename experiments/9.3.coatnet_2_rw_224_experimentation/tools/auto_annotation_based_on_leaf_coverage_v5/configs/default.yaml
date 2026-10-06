@@ -19,7 +19,7 @@ output:
 coverage:
   enabled: true
   low_threshold_percent: 0
-  high_threshold_percent: 1
+  high_threshold_percent: 30
 
 sam2:
   checkpoint: /d/Vipin/github_repos/sam2/checkpoints/sam2.1_hiera_large.pt

@@ -2,13 +2,13 @@
 
 set -e
 
-EXP_ID="exp14_7_pigeonpea_soybean_rep_images_added"
+EXP_ID="exp14_8"
 CONFIG="runs/${EXP_ID}/config.yaml"
 CHECKPOINT="runs/${EXP_ID}/best.pt"
 
-# BASE_DATA="../../../../datasets/20CropData/20Crops200Samples_Watermarked/20Crops200Samples_Watermarked"
+BASE_DATA="../../../../datasets/20CropData/20Crops200Samples_Watermarked/20Crops200Samples_Watermarked"
 # BASE_DATA="../../../../datasets/disease_august/Potato/Potato___healthy"
-BASE_DATA="data/disease_aug_data_temp/cotton_mix_dinov2_hier/"
+# BASE_DATA="data/disease_aug_data_temp/cotton_mix_dinov2_hier/"
 
 
 for CROP in "$@"; do
@@ -33,7 +33,7 @@ for CROP in "$@"; do
     mkdir -p "$OUTPUT_DIR"
 
     # 0. Rename images with hash to avoid duplicates and invalid characters in filenames
-    python tools/rename_images_with_hash.py "$IMAGE_DIR"
+    # python tools/rename_images_with_hash.py "$IMAGE_DIR"
     
     # 1. Prediction
     python batch_predict.py \

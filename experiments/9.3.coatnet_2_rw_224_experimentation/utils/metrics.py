@@ -12,6 +12,11 @@ def segmentation_metrics(logits, targets, threshold=0.5, eps=1e-7):
     fn = ((1 - preds) * targets).sum().item()
     tn = ((1 - preds) * (1 - targets)).sum().item()
 
+    return metrics_from_counts(tp, fp, fn, tn, eps=eps)
+
+
+def metrics_from_counts(tp, fp, fn, tn, eps=1e-7):
+    """Compute segmentation scores from accumulated pixel counts."""
     precision = tp / (tp + fp + eps)
     recall = tp / (tp + fn + eps)
     dice = 2 * tp / (2 * tp + fp + fn + eps)

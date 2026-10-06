@@ -16,7 +16,7 @@ data:
 
 training:
   batch_size: 2
-  epochs: 35
+  epochs: 50
   num_workers: 2
   head_lr: 1.0e-4
   backbone_lr: 1.0e-5

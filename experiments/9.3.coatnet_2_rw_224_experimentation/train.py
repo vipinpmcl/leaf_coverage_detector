@@ -13,7 +13,7 @@ from tqdm import tqdm
 from models import CoAtNetLeafDetector
 from utils.data import LeafSegmentationDataset, discover_images, split_paths
 from utils.losses import bce_dice_loss
-from utils.metrics import segmentation_metrics
+from utils.metrics import metrics_from_counts
 from utils.checkpoint import save_checkpoint
 
 
@@ -58,14 +58,7 @@ def evaluate(model, loader, device, threshold):
     model.eval()
 
     total_loss = 0.0
-
-    metric_sum = {
-        "precision": 0.0,
-        "recall": 0.0,
-        "dice": 0.0,
-        "iou": 0.0,
-        "accuracy": 0.0,
-    }
+    tp = fp = fn = tn = 0.0
 
     with torch.no_grad():
         for batch in loader:
@@ -73,27 +66,19 @@ def evaluate(model, loader, device, threshold):
             masks = batch["mask"].to(device)
 
             logits = model(images)
-
             loss = bce_dice_loss(logits, masks)
-
             total_loss += loss.item()
 
-            metrics = segmentation_metrics(
-                logits,
-                masks,
-                threshold=threshold,
-            )
-
-            for k in metric_sum:
-                metric_sum[k] += metrics[k]
+            preds = (torch.sigmoid(logits) >= threshold).float()
+            masks = masks.float()
+            tp += (preds * masks).sum().item()
+            fp += (preds * (1 - masks)).sum().item()
+            fn += ((1 - preds) * masks).sum().item()
+            tn += ((1 - preds) * (1 - masks)).sum().item()
 
     n = max(1, len(loader))
-
-    return (
-        total_loss / n,
-        {k: v / n for k, v in metric_sum.items()},
-    )
-
+    metrics = metrics_from_counts(tp, fp, fn, tn)
+    return total_loss / n, metrics
 
 def main():
     parser = argparse.ArgumentParser()
@@ -267,6 +252,12 @@ def main():
         weight_decay=cfg["training"]["weight_decay"],
     )
 
+    # Cosine decay is scheduled once per completed epoch.
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=cfg["training"]["epochs"],
+        eta_min=0.0,
+    )
     # ---------------------------------------------------------
     # AMP
     # ---------------------------------------------------------
@@ -361,6 +352,7 @@ def main():
             cfg["training"]["threshold"],
         )
 
+        current_lrs = [group["lr"] for group in optimizer.param_groups]
         print(
             f"Epoch {epoch}: "
             f"train_loss={train_loss:.4f} "
@@ -368,8 +360,10 @@ def main():
             f"IoU={metrics['iou']:.4f} "
             f"Dice={metrics['dice']:.4f} "
             f"Precision={metrics['precision']:.4f} "
-            f"Recall={metrics['recall']:.4f}"
+            f"Recall={metrics['recall']:.4f} "
+            f"lr={[f'{lr:.2e}' for lr in current_lrs]}"
         )
+        scheduler.step()
 
         # -----------------------------------------------------
         # Save last checkpoint
@@ -406,3 +400,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
