@@ -4,27 +4,33 @@ Adds:
 - local video upload with frame-by-frame leaf overlay and MP4 export
 - local PC folder picker (Tkinter when Streamlit runs locally)
 - folder batch inference
-- K-Means clustering using standardized embeddings of leaf coverage, mask geometry,
-  leaf confidence, masked sharpness/edge metrics, brightness, clipping, and saturation
-- raw masked-leaf sharpness/quality metrics
+- min-max normalized embeddings of six foreground-mask metrics, with an independent
+  K-Means cluster assignment for each metric
+- foreground-mask sharpness and image-quality metrics
 - CSV export
 
-Masked quality metrics include Laplacian variance, Tenengrad, Brenner,
-FFT high-frequency ratio, edge density, brightness/contrast, clipping,
-saturation, leaf confidence, and resolution/scale metrics.
+Mask-derived metrics include leaf coverage/area, bounding-box dimensions/fill, and
+mean leaf confidence. Sharpness, edge density, FFT high-frequency ratio,
+brightness/contrast, clipping, and saturation are calculated over the predicted
+foreground mask.
 
-No combined quality score is used.
+`coverage_weighted_edge_saturation_score` is calculated as `(leaf coverage percent / 100)`
+times masked edge density times masked saturation mean. All factors are on a 0–1
+scale. The score is zero when the foreground mask is empty and is included in the
+parameter CSV, correlation matrix, and per-parameter clustering.
 
-Folder clustering standardizes all available metrics into a full embedding for
-each image. The selected features choose which embedding dimensions K-Means uses.
-The exported cluster CSV includes original measurements and every standardized
-`embedding_*` dimension, so images can be compared across multiple processing
-signals rather than coverage alone.
-When clustered images are copied to the output folder, each `cluster_N` folder
-also receives a `cluster_info.json` containing its image count and selected
-feature averages; the output root receives a `cluster_summary.csv`. Each cluster
-stores source images in `images/`, overlays in `overlay/`, and predicted masks in
-`masks/`.
+No single overall image-quality score is used; the coverage-weighted edge-saturation
+feature is a separate parameter.
+
+Folder processing uses only masked Tenengrad, FFT high-frequency ratio, edge density,
+brightness mean, brightness standard deviation, and saturation mean for clustering.
+It min-max normalizes these metrics to 0–1 and assigns each image to independent
+one-dimensional K-Means clusters for every metric. The CSV includes these original
+measurements, normalized `embedding_*` dimensions, and `cluster_<metric>` columns.
+A correlation matrix is shown in the app. Choose a metric to group images into folders; exports are
+written under `<output>/<metric>/cluster_N/`, with `cluster_info.json`,
+`images/`, `overlay/`, and `masks/`. The output root receives
+`cluster_summary.csv` with value ranges for every metric's clusters.
 
 ## Live camera on a phone
 

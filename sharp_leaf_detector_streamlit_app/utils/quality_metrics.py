@@ -87,7 +87,7 @@ def _edge_density(gray, mask):
 
 
 def calculate_quality_metrics(image: Image.Image, mask: np.ndarray, probability: np.ndarray):
-    """Raw metrics; sharpness metrics are computed only over the predicted leaf."""
+    """Calculate mask geometry and image-quality metrics over the foreground mask."""
     h, w = mask.shape
     area = int(mask.sum())
     total = h * w
@@ -119,8 +119,11 @@ def calculate_quality_metrics(image: Image.Image, mask: np.ndarray, probability:
         sat_mean = float(saturation.mean())
     else:
         brightness_mean = brightness_std = dark_clip = bright_clip = sat_mean = 0.0
-
     gray = _gray(image)
+    masked_edge_density = _edge_density(gray, mask)
+    coverage_weighted_edge_saturation_score = (
+        (coverage / 100.0) * masked_edge_density * sat_mean if area > 0 else 0.0
+    )
 
     return {
         "image_width": w,
@@ -139,10 +142,11 @@ def calculate_quality_metrics(image: Image.Image, mask: np.ndarray, probability:
         "masked_tenengrad": _tenengrad(gray, mask),
         "masked_brenner": _brenner(gray, mask),
         "masked_fft_high_frequency_ratio": _fft_high_frequency_ratio(gray, mask),
-        "masked_edge_density": _edge_density(gray, mask),
+        "masked_edge_density": masked_edge_density,
         "masked_brightness_mean": brightness_mean,
         "masked_brightness_std": brightness_std,
         "masked_dark_clip_percent": dark_clip,
         "masked_bright_clip_percent": bright_clip,
         "masked_saturation_mean": sat_mean,
+        "coverage_weighted_edge_saturation_score": coverage_weighted_edge_saturation_score,
     }

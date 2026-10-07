@@ -7,6 +7,7 @@ model:
   adapter_channels: [128, 256, 128, 96]
   decoder_channels: 192
 
+
 data:
   image_size: 224
 

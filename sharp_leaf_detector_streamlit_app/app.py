@@ -18,7 +18,7 @@ import time
 from collections import deque
 from PIL import Image
 from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler
 from torchvision.transforms import functional as TF
 from streamlit_webrtc import webrtc_streamer
 
@@ -309,6 +309,11 @@ def show_metrics(m):
     b.metric("Masked Brenner", f'{m["masked_brenner"]:.5f}')
     c.metric("Masked edge density", f'{m["masked_edge_density"]:.3f}')
     d.metric("BBox fill", f'{m["leaf_bbox_fill_percent"]:.1f}%')
+    st.metric(
+        "Coverage-weighted edge-saturation score",
+        f'{m["coverage_weighted_edge_saturation_score"]:.4f}',
+        help="(Leaf coverage percent / 100) × masked edge density × masked saturation mean. All factors are on a 0–1 scale; an empty foreground mask gives 0.",
+    )
 
 
 def run_batch(model, items, cfg, device, threshold):
@@ -317,7 +322,10 @@ def run_batch(model, items, cfg, device, threshold):
     for i,(name,image) in enumerate(items,1):
         try:
             r = predict_image(model,image,cfg,device,threshold)
-            rows.append({"image":name, **r["metrics"]})
+            rows.append({
+                "image": name,
+                **{feature: r["metrics"][feature] for feature in CLUSTER_FEATURES},
+            })
             visuals.append((name,image,r))
         except Exception as exc:
             rows.append({"image":name,"error":str(exc)})
@@ -327,60 +335,75 @@ def run_batch(model, items, cfg, device, threshold):
 
 
 CLUSTER_FEATURES = [
-    "leaf_coverage_percent",
-    "leaf_mean_probability",
-    "masked_laplacian_variance",
     "masked_tenengrad",
-    "masked_brenner",
     "masked_fft_high_frequency_ratio",
     "masked_edge_density",
     "masked_brightness_mean",
     "masked_brightness_std",
-    "masked_dark_clip_percent",
-    "masked_bright_clip_percent",
     "masked_saturation_mean",
 ]
+EMBEDDING_VERSION = 4
 
 
-def cluster_by_parameters(df, n_clusters, selected_features):
-    """Build the full standardized embedding, then cluster selected dimensions."""
-    embedding_features = [column for column in CLUSTER_FEATURES if column in df.columns]
-    cluster_features = [column for column in selected_features if column in embedding_features]
-    if not embedding_features:
-        raise ValueError("No image-processing metrics are available for embedding.")
-    if not cluster_features:
-        raise ValueError("Select at least one feature for clustering.")
-    valid = df.dropna(subset=["leaf_coverage_percent"]).copy()
+def assign_parameter_clusters(df, n_clusters):
+    """Embed the selected quality metrics and cluster each metric independently."""
+    feature_columns = [column for column in CLUSTER_FEATURES if column in df.columns]
+    if not feature_columns:
+        raise ValueError("No image-processing metrics are available for clustering.")
+    valid = df[["image", *feature_columns]].dropna(
+        subset=feature_columns,
+        how="all",
+    ).copy()
     if len(valid) < n_clusters:
         raise ValueError(f"Need at least {n_clusters} valid images; found {len(valid)}.")
-    features = valid[embedding_features].apply(pd.to_numeric, errors="coerce")
+    features = valid[feature_columns].apply(pd.to_numeric, errors="coerce")
     features = features.replace([np.inf, -np.inf], np.nan)
     features = features.fillna(features.median()).fillna(0.0)
-    scaler = StandardScaler()
+    scaler = MinMaxScaler(feature_range=(0.0, 1.0))
     full_embedding = scaler.fit_transform(features)
     embedding_frame = pd.DataFrame(
         full_embedding,
-        columns=[f"embedding_{column}" for column in embedding_features],
+        columns=[f"embedding_{column}" for column in feature_columns],
         index=valid.index,
     )
     valid[embedding_frame.columns] = embedding_frame
-    selected_embedding = valid[
-        [f"embedding_{column}" for column in cluster_features]
-    ].to_numpy()
-    km = KMeans(n_clusters=n_clusters, random_state=42, n_init=20)
-    valid["cluster_raw"] = km.fit_predict(selected_embedding)
-    # Keep IDs stable and intuitive by ordering clusters by mean leaf coverage.
-    coverage_means = valid.groupby("cluster_raw")["leaf_coverage_percent"].mean()
-    order = coverage_means.sort_values().index.tolist()
-    mapping = {old:new for new,old in enumerate(order)}
-    valid["parameter_cluster"] = valid["cluster_raw"].map(mapping)
-    # Retain the legacy column because existing export actions use it for folder names.
-    valid["coverage_cluster"] = valid["parameter_cluster"]
-    summary = valid.groupby("parameter_cluster")[embedding_features].mean().reset_index()
-    summary.insert(1, "images", valid.groupby("parameter_cluster").size().values)
-    summary.attrs["embedding_features"] = embedding_features
-    summary.attrs["cluster_features"] = cluster_features
-    return valid, summary
+    summary_rows = []
+    for feature_index, feature in enumerate(feature_columns):
+        raw_values = features[feature].to_numpy()
+        values = full_embedding[:, feature_index].reshape(-1, 1)
+        unique_count = len(np.unique(raw_values))
+        cluster_count = min(n_clusters, unique_count)
+        if cluster_count < 2:
+            labels = np.zeros(len(values), dtype=int)
+            centers = np.array([float(raw_values[0])])
+        else:
+            km = KMeans(n_clusters=cluster_count, random_state=42, n_init=20)
+            raw_labels = km.fit_predict(values)
+            normalized_centers = km.cluster_centers_.ravel()
+            order = np.argsort(normalized_centers)
+            mapping = {old: new for new, old in enumerate(order)}
+            labels = np.array([mapping[label] for label in raw_labels], dtype=int)
+            ordered_normalized_centers = np.sort(normalized_centers)
+            centers = (
+                scaler.data_min_[feature_index]
+                + ordered_normalized_centers * scaler.data_range_[feature_index]
+            )
+        cluster_column = f"cluster_{feature}"
+        valid[cluster_column] = labels
+        for cluster_id in range(cluster_count):
+            cluster_values = features.loc[valid.index[labels == cluster_id], feature]
+            summary_rows.append({
+                "parameter": feature,
+                "cluster_id": cluster_id,
+                "images": int(len(cluster_values)),
+                "value_min": float(cluster_values.min()),
+                "value_max": float(cluster_values.max()),
+                "value_mean": float(cluster_values.mean()),
+                "center": float(centers[cluster_id]),
+                "normalization_min": float(scaler.data_min_[feature_index]),
+                "normalization_max": float(scaler.data_max_[feature_index]),
+            })
+    return valid, pd.DataFrame(summary_rows), feature_columns
 
 
 st.set_page_config(page_title="Leaf Coverage Detector", page_icon="🍃", layout="wide")
@@ -538,11 +561,9 @@ with cluster:
     st.subheader("Cluster folder by image-processing parameters")
 
     st.info(
-        "Select a folder containing images. After segmentation, each image is "
-        "represented by a standardized embedding of leaf coverage and mask "
-        "geometry, leaf confidence, masked sharpness and edge metrics, and "
-        "masked brightness, clipping, and saturation. Choose which of these "
-        "features to include in the clustering embedding."
+        "Select a folder to calculate six foreground-mask quality metrics: "
+        "Tenengrad, FFT high-frequency ratio, edge density, brightness mean and "
+        "variation, and saturation. The CSV and parameter clustering use only these metrics."
     )
 
     # ---------------------------------------------------------
@@ -615,31 +636,8 @@ with cluster:
 
         st.markdown("### Clustering settings")
 
-        feature_labels = {
-            "leaf_coverage_percent": "Leaf coverage (%)",
-            "leaf_mean_probability": "Mean leaf confidence",
-            "masked_laplacian_variance": "Masked Laplacian variance",
-            "masked_tenengrad": "Masked Tenengrad sharpness",
-            "masked_brenner": "Masked Brenner sharpness",
-            "masked_fft_high_frequency_ratio": "Masked FFT high-frequency ratio",
-            "masked_edge_density": "Masked edge density",
-            "masked_brightness_mean": "Masked mean brightness",
-            "masked_brightness_std": "Masked brightness variation",
-            "masked_dark_clip_percent": "Masked dark clipping (%)",
-            "masked_bright_clip_percent": "Masked bright clipping (%)",
-            "masked_saturation_mean": "Masked mean saturation",
-        }
-        selected_features = st.multiselect(
-            "Features for clustering",
-            options=CLUSTER_FEATURES,
-            default=CLUSTER_FEATURES,
-            format_func=lambda feature: feature_labels[feature],
-            help="Each selected feature is standardized before clustering. Choose one or more metrics.",
-            key="parameter_cluster_features",
-        )
-
         k = st.slider(
-            "Number of parameter clusters",
+            "Maximum clusters per parameter",
             min_value=2,
             max_value=min(20, len(paths)),
             value=min(5, len(paths)),
@@ -758,16 +756,12 @@ with cluster:
             # -------------------------------------------------
 
             st.markdown(
-                "### Step 2 — Multi-parameter embedding clustering"
+                "### Step 2 — Parameter embeddings and individual clusters"
             )
 
             try:
 
-                clustered, summary = cluster_by_parameters(
-                    df,
-                    k,
-                    selected_features,
-                )
+                clustered, summary, embedding_features = assign_parameter_clusters(df, k)
 
             except Exception as exc:
 
@@ -782,14 +776,13 @@ with cluster:
 
             st.session_state["cluster_df"] = clustered
 
-            st.session_state["cluster_summary"] = summary
-
             st.session_state["cluster_source"] = cluster_folder
 
             st.session_state["cluster_visuals"] = visuals
 
             st.session_state["cluster_output"] = output
-            st.session_state["cluster_features"] = selected_features
+            st.session_state["cluster_embedding_features"] = embedding_features
+            st.session_state["cluster_embedding_version"] = EMBEDDING_VERSION
 
             st.success(
                 f"Processing completed for {len(clustered)} images."
@@ -801,45 +794,81 @@ with cluster:
 
     if "cluster_df" in st.session_state:
 
-        df = st.session_state["cluster_df"]
-
-        summary = st.session_state[
-            "cluster_summary"
-        ]
+        df = st.session_state["cluster_df"].copy()
+        summary = st.session_state.get("cluster_summary")
+        embedding_features = st.session_state.get("cluster_embedding_features")
+        expected_features = [feature for feature in CLUSTER_FEATURES if feature in df.columns]
+        assignments_exist = (
+            embedding_features == expected_features
+            and all(f"cluster_{feature}" in df.columns for feature in embedding_features)
+        )
+        if (
+            summary is None
+            or not assignments_exist
+            or st.session_state.get("cluster_embedding_version") != EMBEDDING_VERSION
+        ):
+            # Streamlit can preserve a dataframe from an older app run while
+            # its newer session-state keys are absent. Rebuild from raw metrics.
+            cluster_count = min(
+                int(st.session_state.get("coverage_cluster_count", 5)),
+                len(df),
+            )
+            df, summary, embedding_features = assign_parameter_clusters(
+                df,
+                cluster_count,
+            )
+            st.session_state["cluster_df"] = df
+            st.session_state["cluster_summary"] = summary
+            st.session_state["cluster_embedding_features"] = embedding_features
+            st.session_state["cluster_embedding_version"] = EMBEDDING_VERSION
 
         # -----------------------------------------------------
         # Summary
         # -----------------------------------------------------
 
         st.markdown(
-            "## 📊 Cluster Summary"
+            "## 📊 Parameter Correlation"
         )
 
         st.caption(
-            "The app embeds all available metrics for every image. The selected "
-            "features determine which embedding dimensions K-Means uses. The CSV "
-            "retains every embedding dimension; cluster values below are averages "
-            "in the original metric units."
+            "Correlation is calculated across the original metric values for all "
+            "successfully processed images. The CSV also contains per-feature "
+            "min-max normalized values in the embedding_* columns (0–1)."
         )
 
-        st.dataframe(
-            summary,
-            use_container_width=True,
-            hide_index=True,
+        correlation = df[st.session_state["cluster_embedding_features"]].corr()
+        st.dataframe(correlation.style.background_gradient(cmap="coolwarm", vmin=-1, vmax=1), use_container_width=True)
+
+        feature_labels = {
+            "masked_tenengrad": "Masked Tenengrad",
+            "masked_fft_high_frequency_ratio": "Masked FFT high-frequency ratio",
+            "masked_edge_density": "Masked edge density",
+            "masked_brightness_mean": "Masked mean brightness",
+            "masked_brightness_std": "Masked brightness variation",
+            "masked_saturation_mean": "Masked mean saturation",
+        }
+        export_parameter = st.selectbox(
+            "Parameter to use for cluster folders",
+            options=st.session_state["cluster_embedding_features"],
+            format_func=lambda feature: feature_labels.get(feature, feature),
+            key="cluster_export_parameter",
         )
+        cluster_col = f"cluster_{export_parameter}"
+        parameter_summary = summary[summary["parameter"] == export_parameter]
+
+        st.markdown(f"### Cluster ranges for {feature_labels.get(export_parameter, export_parameter)}")
+        st.dataframe(parameter_summary, use_container_width=True, hide_index=True)
 
         # -----------------------------------------------------
         # Coverage distribution
         # -----------------------------------------------------
 
         st.markdown(
-            "## 📈 Leaf Coverage by Parameter Cluster"
+            f"## 📈 {feature_labels.get(export_parameter, export_parameter)} by image"
         )
 
         st.bar_chart(
-            df.set_index("image")[
-                "leaf_coverage_percent"
-            ],
+            df.set_index("image")[export_parameter],
             use_container_width=True,
         )
 
@@ -853,8 +882,8 @@ with cluster:
 
         display_df = df.sort_values(
             [
-                "coverage_cluster",
-                "leaf_coverage_percent",
+                cluster_col,
+                export_parameter,
             ]
         )
 
@@ -869,10 +898,8 @@ with cluster:
         # -----------------------------------------------------
 
         st.download_button(
-            "⬇️ Download parameter clusters CSV",
-            data=df.to_csv(
-                index=False
-            ).encode("utf-8"),
+            "⬇️ Download six metrics and parameter clusters CSV",
+            data=df.to_csv(index=False).encode("utf-8"),
             file_name="parameter_clusters.csv",
             mime="text/csv",
             use_container_width=True,
@@ -892,7 +919,7 @@ with cluster:
         )
 
         if st.button(
-            "📦 Copy images into cluster folders",
+            f"📦 Create {export_parameter} folders and copy images",
             use_container_width=True,
         ):
 
@@ -903,6 +930,7 @@ with cluster:
             )
 
             out = Path(output)
+            parameter_out = out / export_parameter
 
             copied = 0
             missing = 0
@@ -942,8 +970,8 @@ with cluster:
                     continue
 
                 destination_dir = (
-                    out
-                    / f"cluster_{int(row['coverage_cluster'])}"
+                    parameter_out
+                    / f"cluster_{int(row[cluster_col])}"
                     / "images"
                 )
 
@@ -975,19 +1003,21 @@ with cluster:
             # Save a portable map from each cluster folder to its feature profile.
             out.mkdir(parents=True, exist_ok=True)
             summary.to_csv(out / "cluster_summary.csv", index=False)
-            for _, cluster_row in summary.iterrows():
-                cluster_id = int(cluster_row["parameter_cluster"])
-                cluster_dir = out / f"cluster_{cluster_id}"
+            parameter_out.mkdir(parents=True, exist_ok=True)
+            for _, cluster_row in parameter_summary.iterrows():
+                cluster_id = int(cluster_row["cluster_id"])
+                cluster_dir = parameter_out / f"cluster_{cluster_id}"
                 cluster_dir.mkdir(parents=True, exist_ok=True)
                 cluster_info = {
+                    "parameter": export_parameter,
                     "cluster_id": cluster_id,
                     "image_count": int(cluster_row["images"]),
-                    "clustered_by": st.session_state.get("cluster_features", []),
-                    "feature_means": {
-                        feature: float(cluster_row[feature])
-                        for feature in CLUSTER_FEATURES
-                        if feature in cluster_row.index and pd.notna(cluster_row[feature])
-                    },
+                    "value_min": float(cluster_row["value_min"]),
+                    "value_max": float(cluster_row["value_max"]),
+                    "value_mean": float(cluster_row["value_mean"]),
+                    "cluster_center": float(cluster_row["center"]),
+                    "normalization_min": float(cluster_row["normalization_min"]),
+                    "normalization_max": float(cluster_row["normalization_max"]),
                 }
                 with (cluster_dir / "cluster_info.json").open("w", encoding="utf-8") as info_file:
                     json.dump(cluster_info, info_file, indent=2)
@@ -1006,12 +1036,13 @@ with cluster:
         # -----------------------------------------------------
 
         if st.button(
-            "🌓 Copy predicted masks into cluster folders",
+            f"🌓 Copy predicted masks for {export_parameter}",
             use_container_width=True,
             key="copy_cluster_predicted_masks",
         ):
 
             out = Path(output)
+            parameter_out = out / export_parameter
             visuals = st.session_state.get(
                 "cluster_visuals",
                 [],
@@ -1038,8 +1069,8 @@ with cluster:
                     continue
 
                 destination_dir = (
-                    out
-                    / f"cluster_{int(row['coverage_cluster'])}"
+                    parameter_out
+                    / f"cluster_{int(row[cluster_col])}"
                     / "masks"
                 )
                 destination_dir.mkdir(parents=True, exist_ok=True)
@@ -1071,7 +1102,7 @@ with cluster:
         # -----------------------------------------------------
 
         if st.button(
-            "🎨 Copy overlay images into cluster folders",
+            f"🎨 Copy overlay images for {export_parameter}",
             use_container_width=True,
             key="copy_cluster_overlay_images",
         ):
@@ -1083,6 +1114,7 @@ with cluster:
             )
 
             out = Path(output)
+            parameter_out = out / export_parameter
 
             visuals = st.session_state.get(
                 "cluster_visuals",
@@ -1133,8 +1165,8 @@ with cluster:
                 image, result = item
 
                 destination_dir = (
-                    out
-                    / f"cluster_{int(row['coverage_cluster'])}"
+                    parameter_out
+                    / f"cluster_{int(row[cluster_col])}"
                     / "overlay"
                 )
 
