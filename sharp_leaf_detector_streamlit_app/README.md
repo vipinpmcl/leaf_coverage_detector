@@ -4,6 +4,7 @@ Adds:
 - local video upload with frame-by-frame leaf overlay and MP4 export
 - local PC folder picker (Tkinter when Streamlit runs locally)
 - folder batch inference
+- folder segregation into below-threshold and at-or-above-threshold leaf-coverage groups, with copy or move
 - min-max normalized embeddings of six foreground-mask metrics, with an independent
   K-Means cluster assignment for each metric
 - foreground-mask sharpness and image-quality metrics

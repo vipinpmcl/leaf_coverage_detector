@@ -98,6 +98,47 @@ def find_images(folder):
     return sorted(p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS)
 
 
+def segregate_images_by_coverage(model, cfg, device, source_folder, output_folder,
+                                 mask_threshold, coverage_threshold, operation,
+                                 progress_callback=None):
+    """Predict coverage and copy/move images into below/at-or-above folders."""
+    source = Path(source_folder).expanduser().resolve()
+    output = Path(output_folder).expanduser().resolve()
+    if not source.is_dir():
+        raise ValueError("Select an existing source folder.")
+    if output == source or source in output.parents or output in source.parents:
+        raise ValueError("Choose a destination folder that does not overlap the source folder.")
+
+    paths = find_images(source)
+    if not paths:
+        raise ValueError("No supported images were found in the source folder.")
+
+    low_dir = output / f"below_{coverage_threshold:g}_percent"
+    high_dir = output / f"at_or_above_{coverage_threshold:g}_percent"
+    results = []
+    for index, path in enumerate(paths, 1):
+        try:
+            with Image.open(path) as source_image:
+                image = source_image.convert("RGB")
+            prediction = predict_image(model, image, cfg, device, mask_threshold)
+            coverage = prediction["metrics"]["leaf_coverage_percent"]
+            group = low_dir if coverage < coverage_threshold else high_dir
+            destination = group / path.relative_to(source)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if operation == "Move":
+                shutil.move(str(path), str(destination))
+            else:
+                shutil.copy2(path, destination)
+            results.append({"image": str(path), "leaf_coverage_percent": coverage,
+                            "group": group.name, "result": "success"})
+        except Exception as exc:
+            results.append({"image": str(path), "leaf_coverage_percent": np.nan,
+                            "group": "", "result": f"error: {exc}"})
+        if progress_callback:
+            progress_callback(index / len(paths))
+    return pd.DataFrame(results)
+
+
 def browse_folder():
     try:
         import tkinter as tk
@@ -437,7 +478,7 @@ try:
 except Exception as exc:
     st.error("Model loading failed."); st.exception(exc); st.stop()
 
-live,single,batch,cluster,video = st.tabs(["📱 Live Camera","🖼️ Single Image","📁 Batch Analysis","🧩 Coverage Clustering","🎞️ Video Overlay"])
+live,single,batch,segregate,cluster,video = st.tabs(["📱 Live Camera","🖼️ Single Image","📁 Batch Analysis","🗂️ Segregate Images","🧩 Coverage Clustering","🎞️ Video Overlay"])
 
 with live:
     st.subheader("Live leaf coverage")
@@ -556,6 +597,67 @@ with batch:
                     ov=make_overlay(img,r["mask"],overlay_alpha)
                     a,b=st.columns(2); a.image(img,use_container_width=True); b.image(ov,use_container_width=True)
                     show_metrics(r["metrics"])
+
+with segregate:
+    st.subheader("Sort a PC folder by leaf coverage")
+    st.caption("Each image is segmented and placed in one of two folders based on its predicted leaf coverage percentage.")
+    if st.button("📂 Choose source folder", key="pick_segregate_source"):
+        selected = browse_folder()
+        if selected:
+            st.session_state["segregate_source"] = selected
+            st.session_state["segregate_source_path"] = selected
+    source_folder = st.text_input(
+        "Source folder path", value=st.session_state.get("segregate_source", ""),
+        key="segregate_source_path",
+    )
+    output_folder = ""
+    if source_folder:
+        source_path = Path(source_folder).expanduser()
+        output_folder = str(source_path.parent / f"{source_path.name}_segregated")
+        st.caption(f"Output folder will be created automatically: `{output_folder}`")
+
+    coverage_threshold = st.number_input(
+        "Leaf coverage threshold (%)", min_value=0.0, max_value=100.0,
+        value=50.0, step=1.0,
+        help="Images below this predicted coverage go in the lower folder; images equal to or above it go in the higher folder.",
+    )
+    operation = st.radio(
+        "What should happen to the original images?", ["Copy", "Move"],
+        horizontal=True, key="segregate_operation",
+    )
+    if source_folder and Path(source_folder).is_dir():
+        st.write(f"Found **{len(find_images(source_folder))}** supported images.")
+    if st.button(f"🚀 {operation} images into two coverage folders", type="primary", key="run_segregation"):
+        if not source_folder or not output_folder:
+            st.error("Choose both a source folder and a destination folder.")
+        else:
+            progress = st.progress(0)
+            status = st.empty()
+            try:
+                segregation_df = segregate_images_by_coverage(
+                    model, cfg, device, source_folder, output_folder,
+                    threshold, coverage_threshold, operation,
+                    progress_callback=progress.progress,
+                )
+                st.session_state["segregation_df"] = segregation_df
+                succeeded = int((segregation_df["result"] == "success").sum())
+                failed = len(segregation_df) - succeeded
+                action = "Copied" if operation == "Copy" else "Moved"
+                status.success(f"{action} {succeeded} of {len(segregation_df)} images into `{Path(output_folder)}`.")
+                if failed:
+                    st.warning(f"{failed} images could not be processed; see the results table.")
+            except Exception as exc:
+                status.error(f"Segregation failed: {exc}")
+            finally:
+                progress.empty()
+    if "segregation_df" in st.session_state:
+        segregation_df = st.session_state["segregation_df"]
+        st.dataframe(segregation_df, use_container_width=True)
+        st.download_button(
+            "Download segregation report",
+            segregation_df.to_csv(index=False).encode("utf-8"),
+            "leaf_coverage_segregation.csv", "text/csv",
+        )
 
 with cluster:
     st.subheader("Cluster folder by image-processing parameters")

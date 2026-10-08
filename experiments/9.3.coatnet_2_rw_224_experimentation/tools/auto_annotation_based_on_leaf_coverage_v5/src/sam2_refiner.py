@@ -180,15 +180,41 @@ class SAM2MaskRefiner:
             scores = np.asarray(scores).reshape(-1)
             if masks.ndim == 2:
                 masks = masks[None, ...]
-            selected_index = int(np.argmax(scores))
-            selected_mask = masks[selected_index]
-            if selected_mask.shape != component.shape:
-                selected_mask = cv2.resize(
-                    selected_mask.astype(np.uint8),
-                    (component.shape[1], component.shape[0]),
-                    interpolation=cv2.INTER_NEAREST,
+            # SAM2 may return a high-scoring multimask candidate that does not
+            # correspond to the prompted component. Prefer candidates that
+            # contain the positive prompt and overlap the source component.
+            # This prevents a different nearby object (or a broad mask) from
+            # being selected just because its predicted IoU score is higher.
+            candidate_masks = []
+            candidate_ranks = []
+            point_x_i = int(np.clip(round(point_x), 0, component.shape[1] - 1))
+            point_y_i = int(np.clip(round(point_y), 0, component.shape[0] - 1))
+            for candidate in masks:
+                if candidate.shape != component.shape:
+                    candidate = cv2.resize(
+                        candidate.astype(np.uint8),
+                        (component.shape[1], component.shape[0]),
+                        interpolation=cv2.INTER_NEAREST,
+                    )
+                candidate = (candidate > self.mask_threshold).astype(np.uint8)
+                intersection = int(np.count_nonzero(candidate & component))
+                union = int(np.count_nonzero(candidate | component))
+                contains_prompt = bool(candidate[point_y_i, point_x_i])
+                candidate_masks.append(candidate)
+                candidate_ranks.append((contains_prompt, intersection / max(union, 1)))
+
+            valid_indices = [
+                index for index, (contains_prompt, _) in enumerate(candidate_ranks)
+                if contains_prompt
+            ]
+            if valid_indices:
+                selected_index = max(
+                    valid_indices,
+                    key=lambda index: (candidate_ranks[index][1], scores[index]),
                 )
-            selected_mask = (selected_mask > self.mask_threshold).astype(np.uint8)
+            else:
+                selected_index = int(np.argmax(scores))
+            selected_mask = candidate_masks[selected_index]
             unique_masks.add(selected_mask.tobytes())
             combined = np.maximum(combined, selected_mask)
             selected_scores.append(float(scores[selected_index]))

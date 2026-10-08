@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from models import CoAtNetLeafDetector
-from utils.data import LeafSegmentationDataset, discover_images, split_paths
+from utils.data import LeafSegmentationDataset, discover_samples, split_paths
 from utils.losses import bce_dice_loss
 from utils.metrics import metrics_from_counts
 from utils.checkpoint import save_checkpoint
@@ -89,17 +89,22 @@ def main():
     )
 
     parser.add_argument(
+        "--source",
+        action="append",
+        default=[],
+        help="Dataset root containing images/ and masks/. Repeat to combine datasets.",
+    )
+
+    parser.add_argument(
         "--images",
         type=str,
-        required=True,
-        help="Image directory.",
+        help="Image directory for one dataset (legacy; use with --masks).",
     )
 
     parser.add_argument(
         "--masks",
         type=str,
-        required=True,
-        help="Mask directory.",
+        help="Mask directory for one dataset (legacy; use with --images).",
     )
 
     parser.add_argument(
@@ -116,8 +121,16 @@ def main():
     # ---------------------------------------------------------
 
     config_path = Path(args.config)
-    images_dir = Path(args.images)
-    masks_dir = Path(args.masks)
+    if args.source and (args.images or args.masks):
+        parser.error("Use repeated --source options or the --images/--masks pair, not both.")
+    if bool(args.images) != bool(args.masks):
+        parser.error("--images and --masks must be provided together.")
+    if not args.source and not args.images:
+        parser.error("Provide at least one --source, or both --images and --masks.")
+
+    sources = [(Path(root) / "images", Path(root) / "masks") for root in args.source]
+    if args.images:
+        sources.append((Path(args.images), Path(args.masks)))
     out_dir = Path(args.output)
 
     # Create output directory first, then capture stdout/stderr (including tqdm)
@@ -153,15 +166,15 @@ def main():
     # Dataset
     # ---------------------------------------------------------
 
-    image_paths = discover_images(images_dir)
+    samples = discover_samples(sources)
 
     train_paths, val_paths = split_paths(
-        image_paths,
+        samples,
         cfg["data"]["val_ratio"],
         cfg["data"]["seed"],
     )
 
-    print(f"Total images : {len(image_paths)}")
+    print(f"Total images : {len(samples)}")
     print(f"Train images : {len(train_paths)}")
     print(f"Val images   : {len(val_paths)}")
 
@@ -171,7 +184,7 @@ def main():
 
     train_ds = LeafSegmentationDataset(
         train_paths,
-        masks_dir,
+        None,
         image_size=size,
         mean=mean,
         std=std,
@@ -181,7 +194,7 @@ def main():
 
     val_ds = LeafSegmentationDataset(
         val_paths,
-        masks_dir,
+        None,
         image_size=size,
         mean=mean,
         std=std,

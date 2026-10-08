@@ -14,15 +14,23 @@ class LeafSegmentationDataset(Dataset):
     def __init__(
         self,
         image_paths,
-        mask_dir,
+        mask_dir=None,
         image_size=224,
         mean=(0.5, 0.5, 0.5),
         std=(0.5, 0.5, 0.5),
         require_masks=True,
         augment=False,
     ):
-        self.image_paths = [Path(p) for p in image_paths]
-        self.mask_dir = Path(mask_dir)
+        # Accept explicit (image, mask) pairs so datasets from separate roots
+        # can be combined without flattening/copying them into one directory.
+        self.samples = []
+        for sample in image_paths:
+            if isinstance(sample, (tuple, list)) and len(sample) == 2:
+                image_path, mask_path = map(Path, sample)
+            else:
+                image_path = Path(sample)
+                mask_path = Path(mask_dir) / f"{image_path.stem}.png"
+            self.samples.append((image_path, mask_path))
         self.image_size = image_size
         self.mean = mean
         self.std = std
@@ -30,27 +38,23 @@ class LeafSegmentationDataset(Dataset):
         self.augment = augment
 
         if require_masks:
-            valid = []
-            for p in self.image_paths:
-                mask = self.mask_dir / f"{p.stem}.png"
-                if mask.exists():
-                    valid.append(p)
-            self.image_paths = valid
+            self.samples = [sample for sample in self.samples if sample[1].exists()]
 
-        if not self.image_paths:
+        if not self.samples:
             raise RuntimeError("No usable images found.")
 
     def __len__(self):
-        return len(self.image_paths)
+        return len(self.samples)
 
     def _mask_path(self, image_path):
-        return self.mask_dir / f"{image_path.stem}.png"
+        for sample_image, mask_path in self.samples:
+            if sample_image == image_path:
+                return mask_path
+        raise KeyError(image_path)
 
     def __getitem__(self, idx):
-        image_path = self.image_paths[idx]
+        image_path, mask_path = self.samples[idx]
         image = Image.open(image_path).convert("RGB")
-
-        mask_path = self._mask_path(image_path)
 
         if mask_path.exists():
             mask = Image.open(mask_path).convert("L")
@@ -136,6 +140,31 @@ def discover_images(image_dir):
         p for p in image_dir.iterdir()
         if p.is_file() and p.suffix.lower() in IMAGE_EXTS
     )
+
+
+def discover_samples(sources):
+    """Discover image/mask pairs from (image_dir, mask_dir) source roots."""
+    samples = []
+    missing_masks = []
+    for image_dir, mask_dir in sources:
+        image_dir, mask_dir = Path(image_dir), Path(mask_dir)
+        if not image_dir.is_dir():
+            raise FileNotFoundError(f"Image directory does not exist: {image_dir}")
+        if not mask_dir.is_dir():
+            raise FileNotFoundError(f"Mask directory does not exist: {mask_dir}")
+        for image_path in discover_images(image_dir):
+            mask_path = mask_dir / f"{image_path.stem}.png"
+            if mask_path.is_file():
+                samples.append((image_path, mask_path))
+            else:
+                missing_masks.append((image_path, mask_path))
+    if missing_masks:
+        examples = ", ".join(str(image) for image, _ in missing_masks[:5])
+        raise RuntimeError(
+            f"{len(missing_masks)} image(s) have no matching PNG mask; examples: {examples}"
+        )
+    # Keep deterministic ordering while preserving the image-to-mask pairing.
+    return sorted(samples, key=lambda pair: (str(pair[0]).casefold(), str(pair[0])))
 
 
 def split_paths(paths, val_ratio=0.2, seed=42):
