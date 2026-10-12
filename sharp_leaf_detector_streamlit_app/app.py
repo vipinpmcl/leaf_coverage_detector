@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import json
 import shutil
 from pathlib import Path
 from urllib.parse import urlparse
@@ -18,7 +17,6 @@ import time
 from collections import deque
 from PIL import Image
 from sklearn.cluster import KMeans
-from sklearn.preprocessing import MinMaxScaler
 from torchvision.transforms import functional as TF
 from streamlit_webrtc import webrtc_streamer
 
@@ -236,43 +234,6 @@ def make_overlay(image, mask, alpha=.45):
     return np.clip(overlay,0,255).astype(np.uint8)
 
 
-def detect_leaf_veins(image, leaf_mask):
-    """Estimate thin vein-like ridges with a multiscale, multi-angle Gabor bank."""
-    rgb = np.asarray(image.convert("RGB"))
-    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-    gray = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
-
-    response = np.zeros(gray.shape, dtype=np.float32)
-    for wavelength in (6.0, 10.0, 16.0):
-        for angle in np.arange(0, np.pi, np.pi / 12):
-            kernel = cv2.getGaborKernel(
-                (21, 21), sigma=3.0, theta=float(angle), lambd=wavelength,
-                gamma=0.5, psi=0, ktype=cv2.CV_32F,
-            )
-            filtered = cv2.filter2D(gray, cv2.CV_32F, kernel)
-            response = np.maximum(response, np.abs(filtered))
-
-    valid = np.asarray(leaf_mask, dtype=bool)
-    if not valid.any():
-        return np.zeros(valid.shape, dtype=bool)
-    local_responses = response[valid]
-    cutoff = float(np.percentile(local_responses, 96))
-    veins = (response >= cutoff) & valid
-    # Remove isolated specks while preserving narrow, connected line responses.
-    return cv2.morphologyEx(
-        veins.astype(np.uint8), cv2.MORPH_OPEN,
-        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
-    ).astype(bool)
-
-
-def make_vein_overlay(image, veins, alpha=0.9):
-    rgb = np.asarray(image.convert("RGB")).astype(np.float32)
-    color = np.zeros_like(rgb)
-    color[..., 2] = 255  # cyan in RGB
-    rgb[veins] = (1 - alpha) * rgb[veins] + alpha * color[veins]
-    return np.clip(rgb, 0, 255).astype(np.uint8)
-
-
 def png_bytes(arr):
     image = arr if isinstance(arr, Image.Image) else Image.fromarray(arr)
     buf = io.BytesIO()
@@ -350,11 +311,6 @@ def show_metrics(m):
     b.metric("Masked Brenner", f'{m["masked_brenner"]:.5f}')
     c.metric("Masked edge density", f'{m["masked_edge_density"]:.3f}')
     d.metric("BBox fill", f'{m["leaf_bbox_fill_percent"]:.1f}%')
-    st.metric(
-        "Coverage-weighted edge-saturation score",
-        f'{m["coverage_weighted_edge_saturation_score"]:.4f}',
-        help="(Leaf coverage percent / 100) × masked edge density × masked saturation mean. All factors are on a 0–1 scale; an empty foreground mask gives 0.",
-    )
 
 
 def run_batch(model, items, cfg, device, threshold):
@@ -363,10 +319,7 @@ def run_batch(model, items, cfg, device, threshold):
     for i,(name,image) in enumerate(items,1):
         try:
             r = predict_image(model,image,cfg,device,threshold)
-            rows.append({
-                "image": name,
-                **{feature: r["metrics"][feature] for feature in CLUSTER_FEATURES},
-            })
+            rows.append({"image":name, **r["metrics"]})
             visuals.append((name,image,r))
         except Exception as exc:
             rows.append({"image":name,"error":str(exc)})
@@ -375,77 +328,71 @@ def run_batch(model, items, cfg, device, threshold):
     return pd.DataFrame(rows), visuals
 
 
-CLUSTER_FEATURES = [
-    "masked_tenengrad",
-    "masked_fft_high_frequency_ratio",
-    "masked_edge_density",
-    "masked_brightness_mean",
-    "masked_brightness_std",
-    "masked_saturation_mean",
-]
-EMBEDDING_VERSION = 4
-
-
-def assign_parameter_clusters(df, n_clusters):
-    """Embed the selected quality metrics and cluster each metric independently."""
-    feature_columns = [column for column in CLUSTER_FEATURES if column in df.columns]
-    if not feature_columns:
-        raise ValueError("No image-processing metrics are available for clustering.")
-    valid = df[["image", *feature_columns]].dropna(
-        subset=feature_columns,
-        how="all",
-    ).copy()
+def cluster_by_coverage(df, n_clusters):
+    valid = df.dropna(subset=["leaf_coverage_percent"]).copy()
     if len(valid) < n_clusters:
         raise ValueError(f"Need at least {n_clusters} valid images; found {len(valid)}.")
-    features = valid[feature_columns].apply(pd.to_numeric, errors="coerce")
-    features = features.replace([np.inf, -np.inf], np.nan)
-    features = features.fillna(features.median()).fillna(0.0)
-    scaler = MinMaxScaler(feature_range=(0.0, 1.0))
-    full_embedding = scaler.fit_transform(features)
-    embedding_frame = pd.DataFrame(
-        full_embedding,
-        columns=[f"embedding_{column}" for column in feature_columns],
-        index=valid.index,
-    )
-    valid[embedding_frame.columns] = embedding_frame
-    summary_rows = []
-    for feature_index, feature in enumerate(feature_columns):
-        raw_values = features[feature].to_numpy()
-        values = full_embedding[:, feature_index].reshape(-1, 1)
-        unique_count = len(np.unique(raw_values))
-        cluster_count = min(n_clusters, unique_count)
-        if cluster_count < 2:
-            labels = np.zeros(len(values), dtype=int)
-            centers = np.array([float(raw_values[0])])
-        else:
-            km = KMeans(n_clusters=cluster_count, random_state=42, n_init=20)
-            raw_labels = km.fit_predict(values)
-            normalized_centers = km.cluster_centers_.ravel()
-            order = np.argsort(normalized_centers)
-            mapping = {old: new for new, old in enumerate(order)}
-            labels = np.array([mapping[label] for label in raw_labels], dtype=int)
-            ordered_normalized_centers = np.sort(normalized_centers)
-            centers = (
-                scaler.data_min_[feature_index]
-                + ordered_normalized_centers * scaler.data_range_[feature_index]
-            )
-        cluster_column = f"cluster_{feature}"
-        valid[cluster_column] = labels
-        for cluster_id in range(cluster_count):
-            cluster_values = features.loc[valid.index[labels == cluster_id], feature]
-            summary_rows.append({
-                "parameter": feature,
-                "cluster_id": cluster_id,
-                "images": int(len(cluster_values)),
-                "value_min": float(cluster_values.min()),
-                "value_max": float(cluster_values.max()),
-                "value_mean": float(cluster_values.mean()),
-                "center": float(centers[cluster_id]),
-                "normalization_min": float(scaler.data_min_[feature_index]),
-                "normalization_max": float(scaler.data_max_[feature_index]),
-            })
-    return valid, pd.DataFrame(summary_rows), feature_columns
+    km = KMeans(n_clusters=n_clusters, random_state=42, n_init=20)
+    valid["cluster_raw"] = km.fit_predict(valid[["leaf_coverage_percent"]])
+    order = np.argsort(km.cluster_centers_.ravel())
+    mapping = {old:new for new,old in enumerate(order)}
+    valid["coverage_cluster"] = valid["cluster_raw"].map(mapping)
+    summary = valid.groupby("coverage_cluster")["leaf_coverage_percent"].agg(
+        images="count", coverage_min="min", coverage_max="max", coverage_mean="mean"
+    ).reset_index()
+    return valid, summary
 
+
+def cluster_by_coverage(df, n_clusters):
+    if not isinstance(n_clusters, int) or n_clusters < 1 or n_clusters > 100:
+        raise ValueError("n_clusters must be an integer between 1 and 100.")
+
+    valid = df.dropna(subset=["leaf_coverage_percent"]).copy()
+
+    coverage = valid["leaf_coverage_percent"]
+
+    if ((coverage < 0) | (coverage > 100)).any():
+        raise ValueError("leaf_coverage_percent must be between 0 and 100.")
+
+    # Create fixed-width bins over the coverage range [0, 100].
+    bin_width = 100.0 / n_clusters
+    edges = np.linspace(0, 100, n_clusters + 1)
+
+    # Cluster IDs are zero-based.
+    # For 5 clusters: [0,20), [20,40), [40,60), [60,80), [80,100].
+    valid["coverage_cluster"] = pd.cut(
+        coverage,
+        bins=edges,
+        labels=False,
+        right=False,
+        include_lowest=True,
+    )
+
+    # Include coverage=100 in the final cluster.
+    valid.loc[coverage == 100, "coverage_cluster"] = n_clusters - 1
+    valid["coverage_cluster"] = valid["coverage_cluster"].astype(int)
+
+    # Include empty clusters in the summary.
+    summary = (
+        valid.groupby("coverage_cluster")["leaf_coverage_percent"]
+        .agg(
+            images="count",
+            coverage_min="min",
+            coverage_max="max",
+            coverage_mean="mean",
+        )
+        .reindex(range(n_clusters))
+        .rename_axis("coverage_cluster")
+        .reset_index()
+    )
+
+    summary["images"] = summary["images"].fillna(0).astype(int)
+
+    # Add the nominal coverage interval for each cluster.
+    summary["bin_min"] = edges[:-1]
+    summary["bin_max"] = edges[1:]
+
+    return valid, summary
 
 st.set_page_config(page_title="Leaf Coverage Detector", page_icon="🍃", layout="wide")
 st.title("🍃 Leaf Coverage Detector")
@@ -478,20 +425,21 @@ try:
 except Exception as exc:
     st.error("Model loading failed."); st.exception(exc); st.stop()
 
-live,single,batch,segregate,cluster,video = st.tabs(["📱 Live Camera","🖼️ Single Image","📁 Batch Analysis","🗂️ Segregate Images","🧩 Coverage Clustering","🎞️ Video Overlay"])
+# live,single,batch,segregate,cluster,video = st.tabs(["📱 Live Camera","🖼️ Single Image","📁 Batch Analysis","🗂️ Segregate Images","🧩 Coverage Clustering","🎞️ Video Overlay"])
+single,batch,segregate,cluster,video = st.tabs(["🖼️ Single Image","📁 Batch Analysis","🗂️ Segregate Images","🧩 Coverage Clustering","🎞️ Video Overlay"])
 
-with live:
-    st.subheader("Live leaf coverage")
-    st.caption("Point the rear camera at the plant and move slowly. The overlay and percentage update from recent camera frames.")
-    inference_interval = st.slider("Inference interval (seconds)", 0.25, 2.0, 0.75, 0.25, help="Increasing this reduces server load; the preview continues between model updates.")
-    callback = make_live_camera_callback(model, cfg, device, threshold, overlay_alpha, inference_interval)
-    webrtc_streamer(
-        key="leaf-live-camera",
-        video_frame_callback=callback,
-        media_stream_constraints={"video": {"facingMode": "environment"}, "audio": False},
-        media_toggle_controls=False,
-    )
-    st.caption("Coverage is the fraction of visible frame pixels classified as leaf. It is an image estimate, not physical leaf area.")
+# with live:
+#     st.subheader("Live leaf coverage")
+#     st.caption("Point the rear camera at the plant and move slowly. The overlay and percentage update from recent camera frames.")
+#     inference_interval = st.slider("Inference interval (seconds)", 0.25, 2.0, 0.75, 0.25, help="Increasing this reduces server load; the preview continues between model updates.")
+#     callback = make_live_camera_callback(model, cfg, device, threshold, overlay_alpha, inference_interval)
+#     webrtc_streamer(
+#         key="leaf-live-camera",
+#         video_frame_callback=callback,
+#         media_stream_constraints={"video": {"facingMode": "environment"}, "audio": False},
+#         media_toggle_controls=False,
+#     )
+#     st.caption("Coverage is the fraction of visible frame pixels classified as leaf. It is an image estimate, not physical leaf area.")
 
 with video:
     st.subheader("Create a leaf overlay from a local video")
@@ -548,18 +496,10 @@ with single:
             overlay=make_overlay(image,r["mask"],overlay_alpha)
             a,b=st.columns(2); a.image(image,caption="Original",use_container_width=True); b.image(overlay,caption="Leaf overlay",use_container_width=True)
         else:
-            st.image(image,caption="Captured image" if source == "Use camera" else "Input image",use_container_width=True)
-        if source == "Use camera":
-            show_veins = st.checkbox("Show estimated leaf veins (experimental)", value=False, key="single_show_veins")
-            if show_veins:
-                veins = detect_leaf_veins(image, r["mask"])
-                vein_view = make_vein_overlay(image, veins)
-                st.image(vein_view, caption="Estimated vein-like lines inside the leaf mask", use_container_width=True)
-                st.caption("This filter-based estimate can mark leaf texture, shadows, and edges as veins. Image detail and lighting affect the result.")
+            st.image(image,caption="Captured image" if source == "Use camera" else "Input image",use_container_width=True)            
         with st.expander("All quality metrics"):
             st.dataframe(pd.DataFrame([{"image":image_name,**m}]),use_container_width=True)
-        if show_overlay:
-            st.download_button("Download overlay",png_bytes(overlay),f"{Path(image_name).stem}_overlay.png","image/png")
+        st.download_button("Download overlay",png_bytes(overlay),f"{Path(image_name).stem}_overlay.png","image/png")
 
 with batch:
     mode=st.radio("Batch input",["Select folder","Enter folder path","Upload images"],horizontal=True)
@@ -660,12 +600,12 @@ with segregate:
         )
 
 with cluster:
-    st.subheader("Cluster folder by image-processing parameters")
+    st.subheader("Cluster folder by leaf coverage")
 
     st.info(
-        "Select a folder to calculate six foreground-mask quality metrics: "
-        "Tenengrad, FFT high-frequency ratio, edge density, brightness mean and "
-        "variation, and saturation. The CSV and parameter clustering use only these metrics."
+        "Select a folder containing images. The app will first run leaf "
+        "segmentation, calculate leaf coverage, then cluster the images "
+        "based on leaf coverage."
     )
 
     # ---------------------------------------------------------
@@ -739,7 +679,7 @@ with cluster:
         st.markdown("### Clustering settings")
 
         k = st.slider(
-            "Maximum clusters per parameter",
+            "Number of coverage clusters",
             min_value=2,
             max_value=min(20, len(paths)),
             value=min(5, len(paths)),
@@ -748,7 +688,7 @@ with cluster:
         )
 
         default_output = str(
-            cluster_path / "parameter_clusters"
+            cluster_path / "coverage_clusters"
         )
 
         output = st.text_input(
@@ -858,12 +798,15 @@ with cluster:
             # -------------------------------------------------
 
             st.markdown(
-                "### Step 2 — Parameter embeddings and individual clusters"
+                "### Step 2 — Coverage clustering"
             )
 
             try:
 
-                clustered, summary, embedding_features = assign_parameter_clusters(df, k)
+                clustered, summary = cluster_by_coverage(
+                    df,
+                    k,
+                )
 
             except Exception as exc:
 
@@ -878,13 +821,13 @@ with cluster:
 
             st.session_state["cluster_df"] = clustered
 
+            st.session_state["cluster_summary"] = summary
+
             st.session_state["cluster_source"] = cluster_folder
 
             st.session_state["cluster_visuals"] = visuals
 
             st.session_state["cluster_output"] = output
-            st.session_state["cluster_embedding_features"] = embedding_features
-            st.session_state["cluster_embedding_version"] = EMBEDDING_VERSION
 
             st.success(
                 f"Processing completed for {len(clustered)} images."
@@ -898,79 +841,46 @@ with cluster:
 
         df = st.session_state["cluster_df"].copy()
         summary = st.session_state.get("cluster_summary")
-        embedding_features = st.session_state.get("cluster_embedding_features")
-        expected_features = [feature for feature in CLUSTER_FEATURES if feature in df.columns]
-        assignments_exist = (
-            embedding_features == expected_features
-            and all(f"cluster_{feature}" in df.columns for feature in embedding_features)
-        )
         if (
             summary is None
-            or not assignments_exist
-            or st.session_state.get("cluster_embedding_version") != EMBEDDING_VERSION
+            and "coverage_cluster" in df.columns
+            and "leaf_coverage_percent" in df.columns
         ):
-            # Streamlit can preserve a dataframe from an older app run while
-            # its newer session-state keys are absent. Rebuild from raw metrics.
-            cluster_count = min(
-                int(st.session_state.get("coverage_cluster_count", 5)),
-                len(df),
-            )
-            df, summary, embedding_features = assign_parameter_clusters(
-                df,
-                cluster_count,
-            )
-            st.session_state["cluster_df"] = df
-            st.session_state["cluster_summary"] = summary
-            st.session_state["cluster_embedding_features"] = embedding_features
-            st.session_state["cluster_embedding_version"] = EMBEDDING_VERSION
+            summary = df.groupby("coverage_cluster")[
+                "leaf_coverage_percent"
+            ].agg(
+                images="count",
+                coverage_min="min",
+                coverage_max="max",
+                coverage_mean="mean",
+            ).reset_index()
 
         # -----------------------------------------------------
         # Summary
         # -----------------------------------------------------
 
         st.markdown(
-            "## 📊 Parameter Correlation"
+            "## 📊 Cluster Summary"
         )
 
-        st.caption(
-            "Correlation is calculated across the original metric values for all "
-            "successfully processed images. The CSV also contains per-feature "
-            "min-max normalized values in the embedding_* columns (0–1)."
+        st.dataframe(
+            summary,
+            use_container_width=True,
+            hide_index=True,
         )
-
-        correlation = df[st.session_state["cluster_embedding_features"]].corr()
-        st.dataframe(correlation.style.background_gradient(cmap="coolwarm", vmin=-1, vmax=1), use_container_width=True)
-
-        feature_labels = {
-            "masked_tenengrad": "Masked Tenengrad",
-            "masked_fft_high_frequency_ratio": "Masked FFT high-frequency ratio",
-            "masked_edge_density": "Masked edge density",
-            "masked_brightness_mean": "Masked mean brightness",
-            "masked_brightness_std": "Masked brightness variation",
-            "masked_saturation_mean": "Masked mean saturation",
-        }
-        export_parameter = st.selectbox(
-            "Parameter to use for cluster folders",
-            options=st.session_state["cluster_embedding_features"],
-            format_func=lambda feature: feature_labels.get(feature, feature),
-            key="cluster_export_parameter",
-        )
-        cluster_col = f"cluster_{export_parameter}"
-        parameter_summary = summary[summary["parameter"] == export_parameter]
-
-        st.markdown(f"### Cluster ranges for {feature_labels.get(export_parameter, export_parameter)}")
-        st.dataframe(parameter_summary, use_container_width=True, hide_index=True)
 
         # -----------------------------------------------------
         # Coverage distribution
         # -----------------------------------------------------
 
         st.markdown(
-            f"## 📈 {feature_labels.get(export_parameter, export_parameter)} by image"
+            "## 📈 Coverage Distribution"
         )
 
         st.bar_chart(
-            df.set_index("image")[export_parameter],
+            df.set_index("image")[
+                "leaf_coverage_percent"
+            ],
             use_container_width=True,
         )
 
@@ -984,8 +894,8 @@ with cluster:
 
         display_df = df.sort_values(
             [
-                cluster_col,
-                export_parameter,
+                "coverage_cluster",
+                "leaf_coverage_percent",
             ]
         )
 
@@ -1000,9 +910,11 @@ with cluster:
         # -----------------------------------------------------
 
         st.download_button(
-            "⬇️ Download six metrics and parameter clusters CSV",
-            data=df.to_csv(index=False).encode("utf-8"),
-            file_name="parameter_clusters.csv",
+            "⬇️ Download coverage clusters CSV",
+            data=df.to_csv(
+                index=False
+            ).encode("utf-8"),
+            file_name="coverage_clusters.csv",
             mime="text/csv",
             use_container_width=True,
         )
@@ -1021,7 +933,7 @@ with cluster:
         )
 
         if st.button(
-            f"📦 Create {export_parameter} folders and copy images",
+            "📦 Copy images into cluster folders",
             use_container_width=True,
         ):
 
@@ -1032,7 +944,6 @@ with cluster:
             )
 
             out = Path(output)
-            parameter_out = out / export_parameter
 
             copied = 0
             missing = 0
@@ -1072,8 +983,8 @@ with cluster:
                     continue
 
                 destination_dir = (
-                    parameter_out
-                    / f"cluster_{int(row[cluster_col])}"
+                    out
+                    / f"cluster_{int(row['coverage_cluster'])}"
                     / "images"
                 )
 
@@ -1102,28 +1013,6 @@ with cluster:
 
             progress.empty()
 
-            # Save a portable map from each cluster folder to its feature profile.
-            out.mkdir(parents=True, exist_ok=True)
-            summary.to_csv(out / "cluster_summary.csv", index=False)
-            parameter_out.mkdir(parents=True, exist_ok=True)
-            for _, cluster_row in parameter_summary.iterrows():
-                cluster_id = int(cluster_row["cluster_id"])
-                cluster_dir = parameter_out / f"cluster_{cluster_id}"
-                cluster_dir.mkdir(parents=True, exist_ok=True)
-                cluster_info = {
-                    "parameter": export_parameter,
-                    "cluster_id": cluster_id,
-                    "image_count": int(cluster_row["images"]),
-                    "value_min": float(cluster_row["value_min"]),
-                    "value_max": float(cluster_row["value_max"]),
-                    "value_mean": float(cluster_row["value_mean"]),
-                    "cluster_center": float(cluster_row["center"]),
-                    "normalization_min": float(cluster_row["normalization_min"]),
-                    "normalization_max": float(cluster_row["normalization_max"]),
-                }
-                with (cluster_dir / "cluster_info.json").open("w", encoding="utf-8") as info_file:
-                    json.dump(cluster_info, info_file, indent=2)
-
             st.success(
                 f"Copied {copied} images."
             )
@@ -1138,13 +1027,12 @@ with cluster:
         # -----------------------------------------------------
 
         if st.button(
-            f"🌓 Copy predicted masks for {export_parameter}",
+            "🌓 Copy predicted masks into cluster folders",
             use_container_width=True,
             key="copy_cluster_predicted_masks",
         ):
 
             out = Path(output)
-            parameter_out = out / export_parameter
             visuals = st.session_state.get(
                 "cluster_visuals",
                 [],
@@ -1171,8 +1059,8 @@ with cluster:
                     continue
 
                 destination_dir = (
-                    parameter_out
-                    / f"cluster_{int(row[cluster_col])}"
+                    out
+                    / f"cluster_{int(row['coverage_cluster'])}"
                     / "masks"
                 )
                 destination_dir.mkdir(parents=True, exist_ok=True)
@@ -1204,7 +1092,7 @@ with cluster:
         # -----------------------------------------------------
 
         if st.button(
-            f"🎨 Copy overlay images for {export_parameter}",
+            "🎨 Copy overlay images into cluster folders",
             use_container_width=True,
             key="copy_cluster_overlay_images",
         ):
@@ -1216,7 +1104,6 @@ with cluster:
             )
 
             out = Path(output)
-            parameter_out = out / export_parameter
 
             visuals = st.session_state.get(
                 "cluster_visuals",
@@ -1267,9 +1154,9 @@ with cluster:
                 image, result = item
 
                 destination_dir = (
-                    parameter_out
-                    / f"cluster_{int(row[cluster_col])}"
-                    / "overlay"
+                    out
+                    / f"cluster_{int(row['coverage_cluster'])}"
+                    / "overlays"
                 )
 
                 destination_dir.mkdir(
