@@ -2,14 +2,14 @@
 
 set -e
 
-EXP_ID="exp15_1"
+EXP_ID="exp15_3"
 CONFIG="runs/${EXP_ID}/config.yaml"
 CHECKPOINT="runs/${EXP_ID}/best.pt"
 
 # BASE_DATA="../../../../datasets/20CropData/20Crops200Samples_Watermarked/20Crops200Samples_Watermarked"
 # BASE_DATA="../../../../datasets/disease_august/Potato/Potato___healthy"
 # BASE_DATA="data/disease_aug_data_temp/cotton_mix_dinov2_hier/"
-BASE_DATA="data/web_leaf_dataset_mixed"
+BASE_DATA="data/testdata/disease_npss_reps_images"
 
 
 for CROP in "$@"; do
