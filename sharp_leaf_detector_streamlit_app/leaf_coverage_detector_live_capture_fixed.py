@@ -26,11 +26,9 @@ import yaml
 
 import cv2
 
-import threading
 
 import time
 
-from collections import deque
 
 from PIL import Image
 
@@ -38,7 +36,6 @@ from sklearn.cluster import KMeans
 
 from torchvision.transforms import functional as TF
 
-from streamlit_webrtc import webrtc_streamer
 
 
 
@@ -355,87 +352,6 @@ def predict_image(model, image, cfg, device, threshold):
           return {"probability": probability, "mask": mask, "metrics": metrics}
 
 
-
-
-
-def make_live_camera_callback(model, cfg, device, threshold, overlay_alpha, interval, shared_state):
-    """Return a WebRTC callback and publish the last inference-matched frame for capture."""
-    state = {
-        "last_time": 0.0,
-        "last_mask": None,
-        "coverage": None,
-        "coverages": deque(maxlen=5),
-    }
-    lock = shared_state["lock"]
-
-    def render_overlay(bgr, mask, coverage):
-        overlay = bgr.copy()
-        green = np.zeros_like(overlay)
-        green[..., 1] = 255
-        overlay[mask] = (
-            (1 - overlay_alpha) * overlay[mask] + overlay_alpha * green[mask]
-        ).astype(np.uint8)
-        cv2.rectangle(overlay, (10, 10), (370, 66), (0, 0, 0), -1)
-        cv2.putText(
-            overlay, f"Leaf coverage: {coverage:.1f}%", (20, 46),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.85, (255, 255, 255), 2, cv2.LINE_AA,
-        )
-        return overlay
-
-    def process_frame(frame):
-        bgr = frame.to_ndarray(format="bgr24")
-        now = time.monotonic()
-
-        # Reuse the previous segmentation between inference runs to keep preview smooth.
-        if state["last_mask"] is not None and now - state["last_time"] < interval:
-            current_mask = cv2.resize(
-                state["last_mask"].astype(np.uint8),
-                (bgr.shape[1], bgr.shape[0]), interpolation=cv2.INTER_NEAREST,
-            ).astype(bool)
-            overlay = render_overlay(bgr, current_mask, state["coverage"])
-            return av.VideoFrame.from_ndarray(overlay, format="bgr24")
-
-        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-        image = Image.fromarray(rgb)
-        height, width = rgb.shape[:2]
-        x = TF.resize(
-            image, [cfg["data"]["image_size"], cfg["data"]["image_size"]],
-            antialias=True,
-        )
-        x = TF.normalize(
-            TF.to_tensor(x), tuple(cfg["normalization"]["mean"]),
-            tuple(cfg["normalization"]["std"]),
-        ).unsqueeze(0).to(device)
-
-        with torch.inference_mode():
-            logits = model(x, output_size=(height, width))
-            probability = torch.sigmoid(logits)[0, 0].float().cpu().numpy()
-
-        mask = probability >= threshold
-        coverage = float(mask.mean() * 100.0)
-        state["coverages"].append(coverage)
-        # Keep the displayed/saved value consistent with this exact predicted mask.
-        smoothed_coverage = coverage
-        state["last_time"] = now
-        state["last_mask"] = mask
-        state["coverage"] = coverage
-
-        # Keep the exact original frame that produced this mask/coverage pair.
-        with lock:
-            shared_state["frame_rgb"] = rgb.copy()
-            shared_state["mask"] = mask.copy()
-            shared_state["coverage"] = smoothed_coverage
-            shared_state["width"] = int(width)
-            shared_state["height"] = int(height)
-            shared_state["threshold"] = float(threshold)
-            shared_state["captured_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-            shared_state["updated_at"] = time.time()
-
-        overlay = render_overlay(bgr, mask, smoothed_coverage)
-        return av.VideoFrame.from_ndarray(overlay, format="bgr24")
-
-    import av
-    return process_frame
 
 
 
@@ -845,111 +761,179 @@ live, single, batch, segregate, cluster, video = st.tabs([
 ])
 
 with live:
-    st.subheader("Live leaf coverage")
+    st.subheader("📷 Capture and classify one photo at a time")
     st.caption(
-        "Aim the camera at the plant. The green overlay marks predicted leaf pixels. "
-        "Coverage is an image estimate, not physical leaf area."
+        "The live video stream is disabled. Take a still photo, and the model will "
+        "estimate leaf coverage and classify it as Fair or Bad."
     )
-    inference_interval = st.slider(
-        "Inference interval (seconds)", 0.25, 2.0, 0.75, 0.25,
-        help="The preview continues between model updates; a shorter interval uses more compute.",
-        key="live_inference_interval",
+
+    coverage_threshold = st.slider(
+        "Minimum leaf coverage for a Fair photo (%)",
+        min_value=0,
+        max_value=100,
+        value=50,
+        step=1,
+        key="photo_coverage_threshold",
+        help="Photos with coverage equal to or above this value are saved as Fair; lower coverage photos are saved as Bad.",
     )
     capture_dir = st.text_input(
-        "Save captures to folder on this PC", "captures", key="live_capture_dir",
-        help="Relative paths are resolved against the directory where Streamlit was started.",
-    )
-    save_overlay = st.checkbox("Also save segmentation overlay", value=True, key="live_save_overlay")
-
-    if "live_capture_state" not in st.session_state:
-        st.session_state["live_capture_state"] = {
-            "lock": threading.Lock(), "frame_rgb": None, "mask": None,
-            "coverage": None, "width": None, "height": None,
-            "threshold": threshold, "captured_at": None, "updated_at": None,
-        }
-    capture_state = st.session_state["live_capture_state"]
-    callback = make_live_camera_callback(
-        model, cfg, device, threshold, overlay_alpha, inference_interval, capture_state
-    )
-    webrtc_streamer(
-        key="leaf-live-camera",
-        video_frame_callback=callback,
-        media_stream_constraints={"video": {"facingMode": "environment"}, "audio": False},
-        media_toggle_controls=True,
+        "Save photos on this PC", "captures", key="classified_capture_dir",
+        help="Relative paths are resolved from the directory where Streamlit was started.",
     )
 
-    with capture_state["lock"]:
-        has_frame = capture_state.get("frame_rgb") is not None
-        live_coverage = capture_state.get("coverage")
-        live_frame = capture_state.get("frame_rgb")
-        live_mask = capture_state.get("mask")
-        live_width = capture_state.get("width")
-        live_height = capture_state.get("height")
-        live_threshold = capture_state.get("threshold", threshold)
-        inference_time = capture_state.get("captured_at")
+    if "photo_capture_index" not in st.session_state:
+        st.session_state["photo_capture_index"] = 0
+    if "classified_photo_result" not in st.session_state:
+        st.session_state["classified_photo_result"] = None
 
-    if has_frame and live_coverage is not None:
-        st.metric("Current leaf coverage", f"{live_coverage:.2f}%")
-        st.caption(f"Inference frame: {live_width} × {live_height} · threshold {live_threshold:.2f}")
-    else:
-        st.info("Start the camera and wait for the first segmentation result before capturing.")
+    capture_index = st.session_state["photo_capture_index"]
 
-    if st.button("📸 Capture Photo", type="primary", key="capture_live_photo", disabled=not has_frame):
-        try:
-            output_root = Path(capture_dir).expanduser()
-            if not output_root.is_absolute():
-                output_root = Path.cwd() / output_root
-            images_dir = output_root / "images"
-            overlays_dir = output_root / "overlays"
-            images_dir.mkdir(parents=True, exist_ok=True)
-            if save_overlay:
-                overlays_dir.mkdir(parents=True, exist_ok=True)
+    # Clear the prior camera widget value BEFORE instantiating the widget.
+    # Streamlit forbids assigning to a widget-owned key after it is created;
+    # deleting it before creation is the supported session-state reset pattern.
+    if st.session_state.pop("reset_classified_camera", False):
+        st.session_state.pop("classified_photo_camera", None)
 
-            # Snapshot shared data under the lock so the saved image and mask stay paired.
-            with capture_state["lock"]:
-                rgb_to_save = capture_state["frame_rgb"].copy()
-                mask_to_save = capture_state["mask"].copy()
-                coverage_to_save = float(capture_state["coverage"])
-                width_to_save = int(capture_state["width"])
-                height_to_save = int(capture_state["height"])
-                threshold_to_save = float(capture_state["threshold"])
-                frame_time = capture_state.get("captured_at") or time.strftime("%Y-%m-%d %H:%M:%S")
+    camera_photo = st.camera_input(
+        "Take a photo of the plant or leaf",
+        key="classified_photo_camera",
+    )
 
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            image_path = images_dir / f"leaf_{timestamp}.jpg"
-            counter = 1
-            while image_path.exists():
-                image_path = images_dir / f"leaf_{timestamp}_{counter:02d}.jpg"
-                counter += 1
-            Image.fromarray(rgb_to_save).save(image_path, format="JPEG", quality=95, subsampling=0)
+    if camera_photo is not None:
+        import hashlib
 
-            overlay_path = ""
-            if save_overlay:
-                overlay_rgb = make_overlay(Image.fromarray(rgb_to_save), mask_to_save, overlay_alpha)
-                overlay_file = overlays_dir / f"{image_path.stem}_overlay.png"
-                Image.fromarray(overlay_rgb).save(overlay_file, format="PNG")
-                overlay_path = str(overlay_file.resolve())
+        photo_bytes = camera_photo.getvalue()
+        photo_digest = hashlib.sha256(photo_bytes).hexdigest()
+        photo_key = photo_digest
+        previous_result = st.session_state.get("classified_photo_result")
 
-            metrics_path = output_root / "capture_metrics.csv"
-            row = {
-                "filename": image_path.name,
-                "image_path": str(image_path.resolve()),
-                "overlay_path": overlay_path,
-                "timestamp": frame_time,
-                "leaf_coverage_percent": round(coverage_to_save, 4),
-                "image_width": width_to_save,
-                "image_height": height_to_save,
-                "mask_threshold": threshold_to_save,
-            }
-            pd.DataFrame([row]).to_csv(
-                metrics_path, mode="a", header=not metrics_path.exists(), index=False
+        # Process/save each captured photo only once, despite Streamlit reruns.
+        if not previous_result or previous_result.get("photo_key") != photo_key:
+            try:
+                image = Image.open(io.BytesIO(photo_bytes)).convert("RGB")
+                prediction = predict_image(model, image, cfg, device, threshold)
+                metrics = prediction["metrics"]
+                coverage = float(metrics["leaf_coverage_percent"])
+                classification = "fair" if coverage >= float(coverage_threshold) else "bad"
+
+                output_root = Path(capture_dir).expanduser()
+                if not output_root.is_absolute():
+                    output_root = Path.cwd() / output_root
+                class_dir = output_root / classification
+                overlay_dir = class_dir / "overlays"
+                class_dir.mkdir(parents=True, exist_ok=True)
+                overlay_dir.mkdir(parents=True, exist_ok=True)
+
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                image_path = class_dir / f"leaf_{timestamp}.jpg"
+                suffix = 1
+                while image_path.exists():
+                    image_path = class_dir / f"leaf_{timestamp}_{suffix:02d}.jpg"
+                    suffix += 1
+                image.save(image_path, format="JPEG", quality=95, subsampling=0)
+
+                overlay_rgb = make_overlay(image, prediction["mask"], overlay_alpha)
+                # Add a clearly readable coverage label directly onto the saved overlay.
+                label = f"Leaf coverage: {coverage:.2f}%"
+                h, w = overlay_rgb.shape[:2]
+                font_scale = max(0.65, min(w, h) / 900.0)
+                thickness = max(2, int(round(font_scale * 2)))
+                (text_w, text_h), baseline = cv2.getTextSize(
+                    label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness
+                )
+                pad = max(10, int(round(font_scale * 12)))
+                cv2.rectangle(
+                    overlay_rgb, (0, 0),
+                    (min(w - 1, text_w + pad * 2), min(h - 1, text_h + baseline + pad * 2)),
+                    (0, 0, 0), thickness=-1,
+                )
+                cv2.putText(
+                    overlay_rgb, label, (pad, min(h - 1, text_h + pad)),
+                    cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255),
+                    thickness, cv2.LINE_AA,
+                )
+                overlay_path = overlay_dir / f"{image_path.stem}_overlay.png"
+                Image.fromarray(overlay_rgb).save(overlay_path, format="PNG")
+
+                metrics_path = output_root / "capture_classification_metrics.csv"
+                row = {
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "filename": image_path.name,
+                    "image_path": str(image_path.resolve()),
+                    "overlay_path": str(overlay_path.resolve()),
+                    "leaf_coverage_percent": round(coverage, 4),
+                    "coverage_threshold_percent": float(coverage_threshold),
+                    "classification": classification,
+                    "image_width": image.width,
+                    "image_height": image.height,
+                    "mask_threshold": float(threshold),
+                }
+                pd.DataFrame([row]).to_csv(
+                    metrics_path, mode="a", header=not metrics_path.exists(), index=False
+                )
+
+                st.session_state["classified_photo_result"] = {
+                    "photo_key": photo_key,
+                    "capture_index": capture_index,
+                    "classification": classification,
+                    "coverage": coverage,
+                    "coverage_threshold": float(coverage_threshold),
+                    "image_path": str(image_path.resolve()),
+                    "overlay_path": str(overlay_path.resolve()),
+                    "metrics_path": str(metrics_path.resolve()),
+                    "width": image.width,
+                    "height": image.height,
+                    "overlay_rgb": overlay_rgb,
+                }
+            except Exception as exc:
+                st.error(f"Could not process or save this photo: {exc}")
+
+    result = st.session_state.get("classified_photo_result")
+    if result and result.get("capture_index") == capture_index:
+        coverage = result["coverage"]
+        if result["classification"] == "fair":
+            st.success(
+                f"✅ Selected as FAIR — leaf coverage {coverage:.2f}% "
+                f"(minimum {result['coverage_threshold']:.0f}%)."
             )
-            st.success(f"Saved photo to `{image_path.resolve()}` · leaf coverage {coverage_to_save:.2f}%")
-            st.caption(f"Metrics appended to `{metrics_path.resolve()}`")
-            st.image(rgb_to_save, caption=f"Captured original · {coverage_to_save:.2f}% leaf coverage", use_container_width=True)
-        except Exception as exc:
-            st.error(f"Could not save capture: {exc}")
+        else:
+            st.warning(
+                f"⚠️ Selected as BAD — leaf coverage {coverage:.2f}% "
+                f"(minimum {result['coverage_threshold']:.0f}%)."
+            )
+        st.caption(f"Original photo saved to: `{result['image_path']}`")
+        st.caption(f"Overlay saved to: `{result['overlay_path']}`")
+        st.caption(
+            f"Image: {result['width']} × {result['height']} · "
+            f"Metrics CSV: `{result['metrics_path']}`"
+        )
 
+        show_overlay = st.checkbox(
+            "Show segmentation overlay (optional)",
+            value=False,
+            key=f"show_classified_overlay_{capture_index}",
+        )
+        if show_overlay:
+            st.image(
+                result["overlay_rgb"],
+                caption=f"Saved overlay · leaf coverage {coverage:.2f}%",
+                use_container_width=True,
+            )
+
+        st.info("Photo classified and saved. Please collect the next photo quickly to continue the dataset collection.")
+        if st.button("📸 Collect next photo", type="primary", key=f"next_classified_photo_{capture_index}"):
+            # On the next rerun, clear the camera widget's previous captured
+            # value before recreating the widget, so the user gets a fresh capture.
+            # Keep the previous result internally for duplicate protection.
+            st.session_state["photo_capture_index"] = capture_index + 1
+            st.session_state["reset_classified_camera"] = True
+            st.rerun()
+    else:
+        st.info(
+            "Take a new photo to continue. The previous capture has been cleared; "
+            "the original image and labeled overlay are saved automatically, while the overlay "
+            "remains hidden unless you request it."
+        )
 
 
 with video:
